@@ -3,16 +3,11 @@ import {
   Plus, Edit2, Trash2, Users, FileSpreadsheet,
   ArrowLeft, Save, X, ChevronRight, LogOut, Shield, UserCircle
 } from 'lucide-react';
+import { supabase } from './lib/supabase';
 
 // ============================================================================
 // CONSTANTS
 // ============================================================================
-
-const STORAGE_KEYS = {
-  PARTNERS: 'partners',
-  LEADS: 'leads',
-  ADMIN_DATA: 'adminData',
-};
 
 const STATUS_OPTIONS = [
   { value: 'identified', label: 'Identified' },
@@ -36,7 +31,7 @@ const INITIAL_LEAD_FORM = {
   phone: '',
   company: '',
   title: '',
-  companyUrl: '',
+  company_url: '',
   industry: '',
   headcount: '',
   status: 'identified',
@@ -51,66 +46,86 @@ const INITIAL_PARTNER_FORM = {
 };
 
 // ============================================================================
-// CUSTOM HOOKS
+// CUSTOM HOOKS - SUPABASE
 // ============================================================================
 
 /**
- * Hook for persistent storage operations
- */
-const useStorage = (key, initialValue = null) => {
-  const [data, setData] = useState(initialValue);
-  const [isLoading, setIsLoading] = useState(true);
-
-  useEffect(() => {
-    const loadData = async () => {
-      try {
-        const result = await window.storage.get(key);
-        if (result?.value) {
-          setData(JSON.parse(result.value));
-        }
-      } catch (e) {
-        console.log(`No data for key: ${key}`);
-      }
-      setIsLoading(false);
-    };
-    loadData();
-  }, [key]);
-
-  const saveData = useCallback(async (newData) => {
-    setData(newData);
-    try {
-      await window.storage.set(key, JSON.stringify(newData));
-    } catch (e) {
-      console.error(`Error saving ${key}:`, e);
-    }
-  }, [key]);
-
-  return { data, setData: saveData, isLoading };
-};
-
-/**
- * Hook for managing partners data
+ * Hook for managing partners data with Supabase
  */
 const usePartners = () => {
-  const { data: partners, setData: setPartners, isLoading } = useStorage(STORAGE_KEYS.PARTNERS, []);
+  const [partners, setPartners] = useState([]);
+  const [isLoading, setIsLoading] = useState(true);
 
-  const addPartner = useCallback((partner) => {
-    const newPartner = {
-      id: Date.now().toString(),
-      ...partner,
-      createdAt: new Date().toISOString(),
-    };
-    setPartners([...partners, newPartner]);
-    return newPartner;
-  }, [partners, setPartners]);
+  // Fetch partners on mount
+  useEffect(() => {
+    fetchPartners();
+  }, []);
 
-  const updatePartner = useCallback((partnerId, updates) => {
-    setPartners(partners.map(p => p.id === partnerId ? { ...p, ...updates } : p));
-  }, [partners, setPartners]);
+  const fetchPartners = async () => {
+    try {
+      const { data, error } = await supabase
+        .from('partners')
+        .select('*')
+        .order('created_at', { ascending: false });
 
-  const deletePartner = useCallback((partnerId) => {
-    setPartners(partners.filter(p => p.id !== partnerId));
-  }, [partners, setPartners]);
+      if (error) throw error;
+      setPartners(data || []);
+    } catch (error) {
+      console.error('Error fetching partners:', error);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const addPartner = useCallback(async (partner) => {
+    try {
+      const { data, error } = await supabase
+        .from('partners')
+        .insert([partner])
+        .select()
+        .single();
+
+      if (error) throw error;
+      setPartners(prev => [data, ...prev]);
+      return data;
+    } catch (error) {
+      console.error('Error adding partner:', error);
+      alert('Error adding partner');
+      return null;
+    }
+  }, []);
+
+  const updatePartner = useCallback(async (partnerId, updates) => {
+    try {
+      const { data, error } = await supabase
+        .from('partners')
+        .update(updates)
+        .eq('id', partnerId)
+        .select()
+        .single();
+
+      if (error) throw error;
+      setPartners(prev => prev.map(p => p.id === partnerId ? data : p));
+    } catch (error) {
+      console.error('Error updating partner:', error);
+      alert('Error updating partner');
+    }
+  }, []);
+
+  const deletePartner = useCallback(async (partnerId) => {
+    try {
+      const { error } = await supabase
+        .from('partners')
+        .delete()
+        .eq('id', partnerId);
+
+      if (error) throw error;
+      setPartners(prev => prev.filter(p => p.id !== partnerId));
+    } catch (error) {
+      console.error('Error deleting partner:', error);
+      alert('Error deleting partner');
+    }
+  }, []);
 
   const getPartnerById = useCallback((partnerId) => {
     return partners.find(p => p.id === partnerId);
@@ -128,53 +143,131 @@ const usePartners = () => {
     deletePartner,
     getPartnerById,
     getPartnerByEmail,
+    refetch: fetchPartners,
   };
 };
 
 /**
- * Hook for managing leads data
+ * Hook for managing leads data with Supabase
  */
 const useLeads = () => {
-  const { data: leads, setData: setLeads, isLoading } = useStorage(STORAGE_KEYS.LEADS, {});
+  const [leads, setLeads] = useState({});
+  const [isLoading, setIsLoading] = useState(true);
 
-  const addLead = useCallback((partnerId, lead) => {
-    const newLead = {
-      id: Date.now().toString(),
-      ...lead,
-      createdAt: new Date().toISOString(),
-    };
-    setLeads({ ...leads, [partnerId]: [...(leads[partnerId] || []), newLead] });
-    return newLead;
-  }, [leads, setLeads]);
+  // Fetch all leads on mount
+  useEffect(() => {
+    fetchAllLeads();
+  }, []);
 
-  const updateLead = useCallback((partnerId, leadId, updates) => {
-    const partnerLeads = leads[partnerId] || [];
-    setLeads({
-      ...leads,
-      [partnerId]: partnerLeads.map(l => l.id === leadId ? { ...l, ...updates } : l),
-    });
-  }, [leads, setLeads]);
+  const fetchAllLeads = async () => {
+    try {
+      const { data, error } = await supabase
+        .from('leads')
+        .select('*')
+        .order('created_at', { ascending: false });
 
-  const deleteLead = useCallback((partnerId, leadId) => {
-    const partnerLeads = leads[partnerId] || [];
-    setLeads({ ...leads, [partnerId]: partnerLeads.filter(l => l.id !== leadId) });
-  }, [leads, setLeads]);
+      if (error) throw error;
+
+      // Group leads by partner_id
+      const groupedLeads = (data || []).reduce((acc, lead) => {
+        const partnerId = lead.partner_id;
+        if (!acc[partnerId]) acc[partnerId] = [];
+        acc[partnerId].push(lead);
+        return acc;
+      }, {});
+
+      setLeads(groupedLeads);
+    } catch (error) {
+      console.error('Error fetching leads:', error);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const addLead = useCallback(async (partnerId, lead) => {
+    try {
+      const { data, error } = await supabase
+        .from('leads')
+        .insert([{ ...lead, partner_id: partnerId }])
+        .select()
+        .single();
+
+      if (error) throw error;
+
+      setLeads(prev => ({
+        ...prev,
+        [partnerId]: [data, ...(prev[partnerId] || [])],
+      }));
+      return data;
+    } catch (error) {
+      console.error('Error adding lead:', error);
+      alert('Error adding lead');
+      return null;
+    }
+  }, []);
+
+  const updateLead = useCallback(async (partnerId, leadId, updates) => {
+    try {
+      const { data, error } = await supabase
+        .from('leads')
+        .update(updates)
+        .eq('id', leadId)
+        .select()
+        .single();
+
+      if (error) throw error;
+
+      setLeads(prev => ({
+        ...prev,
+        [partnerId]: (prev[partnerId] || []).map(l => l.id === leadId ? data : l),
+      }));
+    } catch (error) {
+      console.error('Error updating lead:', error);
+      alert('Error updating lead');
+    }
+  }, []);
+
+  const deleteLead = useCallback(async (partnerId, leadId) => {
+    try {
+      const { error } = await supabase
+        .from('leads')
+        .delete()
+        .eq('id', leadId);
+
+      if (error) throw error;
+
+      setLeads(prev => ({
+        ...prev,
+        [partnerId]: (prev[partnerId] || []).filter(l => l.id !== leadId),
+      }));
+    } catch (error) {
+      console.error('Error deleting lead:', error);
+      alert('Error deleting lead');
+    }
+  }, []);
 
   const getLeadsByPartner = useCallback((partnerId) => {
     return leads[partnerId] || [];
   }, [leads]);
 
-  const initializePartnerLeads = useCallback((partnerId) => {
-    if (!leads[partnerId]) {
-      setLeads({ ...leads, [partnerId]: [] });
-    }
-  }, [leads, setLeads]);
+  const removePartnerLeads = useCallback(async (partnerId) => {
+    try {
+      const { error } = await supabase
+        .from('leads')
+        .delete()
+        .eq('partner_id', partnerId);
 
-  const removePartnerLeads = useCallback((partnerId) => {
-    const newLeads = { ...leads };
-    delete newLeads[partnerId];
-    setLeads(newLeads);
-  }, [leads, setLeads]);
+      if (error) throw error;
+
+      setLeads(prev => {
+        const newLeads = { ...prev };
+        delete newLeads[partnerId];
+        return newLeads;
+      });
+    } catch (error) {
+      console.error('Error removing partner leads:', error);
+    }
+  }, []);
 
   return {
     leads,
@@ -183,26 +276,60 @@ const useLeads = () => {
     updateLead,
     deleteLead,
     getLeadsByPartner,
-    initializePartnerLeads,
     removePartnerLeads,
+    refetch: fetchAllLeads,
   };
 };
 
 /**
- * Hook for admin authentication
+ * Hook for admin authentication with Supabase
  */
 const useAdminAuth = () => {
-  const { data: adminData, setData: setAdminData, isLoading } = useStorage(STORAGE_KEYS.ADMIN_DATA, null);
+  const [adminData, setAdminData] = useState(null);
+  const [isLoading, setIsLoading] = useState(true);
+
+  useEffect(() => {
+    fetchAdmin();
+  }, []);
+
+  const fetchAdmin = async () => {
+    try {
+      const { data, error } = await supabase
+        .from('admin')
+        .select('*')
+        .limit(1)
+        .single();
+
+      if (error && error.code !== 'PGRST116') throw error; // PGRST116 = no rows
+      setAdminData(data);
+    } catch (error) {
+      console.error('Error fetching admin:', error);
+    } finally {
+      setIsLoading(false);
+    }
+  };
 
   const register = useCallback(async (name, email, password) => {
-    const newAdminData = {
-      name: name.trim(),
-      email: email.trim().toLowerCase(),
-      password,
-    };
-    await setAdminData(newAdminData);
-    return newAdminData;
-  }, [setAdminData]);
+    try {
+      const { data, error } = await supabase
+        .from('admin')
+        .insert([{
+          name: name.trim(),
+          email: email.trim().toLowerCase(),
+          password, // Note: In production, hash this!
+        }])
+        .select()
+        .single();
+
+      if (error) throw error;
+      setAdminData(data);
+      return data;
+    } catch (error) {
+      console.error('Error registering admin:', error);
+      alert('Error creating account');
+      return null;
+    }
+  }, []);
 
   const validateLogin = useCallback((password) => {
     return adminData && adminData.password === password;
@@ -213,9 +340,20 @@ const useAdminAuth = () => {
     if (email.trim().toLowerCase() !== adminData.email) return false;
     if (oldPassword !== adminData.password) return false;
 
-    await setAdminData({ ...adminData, password: newPassword });
-    return true;
-  }, [adminData, setAdminData]);
+    try {
+      const { error } = await supabase
+        .from('admin')
+        .update({ password: newPassword })
+        .eq('id', adminData.id);
+
+      if (error) throw error;
+      setAdminData(prev => ({ ...prev, password: newPassword }));
+      return true;
+    } catch (error) {
+      console.error('Error changing password:', error);
+      return false;
+    }
+  }, [adminData]);
 
   return {
     adminData,
@@ -414,8 +552,8 @@ const PartnerForm = ({ partner, onSave, onClose }) => {
     onSave({
       name: formData.name.trim(),
       email: formData.email.trim(),
-      phone: formData.phone.trim(),
-      company: formData.company.trim(),
+      phone: formData.phone?.trim() || '',
+      company: formData.company?.trim() || '',
     });
   };
 
@@ -443,13 +581,13 @@ const PartnerForm = ({ partner, onSave, onClose }) => {
         <Input
           label="Phone"
           type="tel"
-          value={formData.phone}
+          value={formData.phone || ''}
           onChange={handleChange('phone')}
           placeholder="(555) 123-4567"
         />
         <Input
           label="Company"
-          value={formData.company}
+          value={formData.company || ''}
           onChange={handleChange('company')}
           placeholder="Company name"
         />
@@ -480,10 +618,16 @@ const LeadForm = ({ lead, onSave, onClose }) => {
       return;
     }
     onSave({
-      ...formData,
       name: formData.name.trim(),
       email: formData.email.trim(),
+      phone: formData.phone?.trim() || '',
       company: formData.company.trim(),
+      title: formData.title?.trim() || '',
+      company_url: formData.company_url?.trim() || '',
+      industry: formData.industry?.trim() || '',
+      headcount: formData.headcount?.trim() || '',
+      status: formData.status,
+      notes: formData.notes?.trim() || '',
     });
   };
 
@@ -508,7 +652,7 @@ const LeadForm = ({ lead, onSave, onClose }) => {
         <Input
           label="Phone"
           type="tel"
-          value={formData.phone}
+          value={formData.phone || ''}
           onChange={handleChange('phone')}
           placeholder="(555) 123-4567"
         />
@@ -521,26 +665,26 @@ const LeadForm = ({ lead, onSave, onClose }) => {
         />
         <Input
           label="Title"
-          value={formData.title}
+          value={formData.title || ''}
           onChange={handleChange('title')}
           placeholder="Job title"
         />
         <Input
           label="Company URL"
           type="url"
-          value={formData.companyUrl}
-          onChange={handleChange('companyUrl')}
+          value={formData.company_url || ''}
+          onChange={handleChange('company_url')}
           placeholder="https://company.com"
         />
         <Input
           label="Industry"
-          value={formData.industry}
+          value={formData.industry || ''}
           onChange={handleChange('industry')}
           placeholder="e.g. Technology, Healthcare"
         />
         <Input
           label="Headcount"
-          value={formData.headcount}
+          value={formData.headcount || ''}
           onChange={handleChange('headcount')}
           placeholder="e.g. 50, 100-500"
         />
@@ -553,7 +697,7 @@ const LeadForm = ({ lead, onSave, onClose }) => {
         />
         <TextArea
           label="Notes"
-          value={formData.notes}
+          value={formData.notes || ''}
           onChange={handleChange('notes')}
           rows={3}
           placeholder="Additional notes..."
@@ -634,8 +778,8 @@ const LeadsTable = ({ leads, onEdit, onDelete }) => (
             <td className="px-4 py-4 text-sm text-gray-900">{lead.name}</td>
             <td className="px-4 py-4 text-sm text-gray-500">{lead.email}</td>
             <td className="px-4 py-4 text-sm text-gray-500">
-              {lead.companyUrl ? (
-                <a href={lead.companyUrl} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline">
+              {lead.company_url ? (
+                <a href={lead.company_url} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline">
                   {lead.company}
                 </a>
               ) : lead.company}
@@ -645,7 +789,7 @@ const LeadsTable = ({ leads, onEdit, onDelete }) => (
             <td className="px-4 py-4 text-sm text-gray-500">{lead.headcount || '-'}</td>
             <td className="px-4 py-4"><StatusBadge status={lead.status} /></td>
             <td className="px-4 py-4 text-sm text-gray-500">
-              {lead.createdAt ? new Date(lead.createdAt).toLocaleDateString() : '-'}
+              {lead.created_at ? new Date(lead.created_at).toLocaleDateString() : '-'}
             </td>
             <td className="px-4 py-4 text-right">
               <Button variant="ghost" size="sm" onClick={() => onEdit(lead)}>
@@ -797,8 +941,10 @@ const LoginScreen = ({ onSuperadminLogin, onPartnerLogin, hasPartners }) => {
   };
 
   const handleRegister = async (name, email, password) => {
-    await register(name, email, password);
-    alert('Account created successfully! You can now log in.');
+    const result = await register(name, email, password);
+    if (result) {
+      alert('Account created successfully! You can now log in.');
+    }
   };
 
   const handlePasswordChange = async (email, oldPassword, newPassword) => {
@@ -922,11 +1068,11 @@ const PartnerView = ({ partner, leads, onLogout, onAddLead, onEditLead, onDelete
   const [showLeadForm, setShowLeadForm] = useState(false);
   const [editingLead, setEditingLead] = useState(null);
 
-  const handleSaveLead = (leadData) => {
+  const handleSaveLead = async (leadData) => {
     if (editingLead) {
-      onEditLead(editingLead.id, leadData);
+      await onEditLead(editingLead.id, leadData);
     } else {
-      onAddLead(leadData);
+      await onAddLead(leadData);
     }
     setShowLeadForm(false);
     setEditingLead(null);
@@ -937,9 +1083,9 @@ const PartnerView = ({ partner, leads, onLogout, onAddLead, onEditLead, onDelete
     setShowLeadForm(true);
   };
 
-  const handleDeleteLead = (leadId) => {
+  const handleDeleteLead = async (leadId) => {
     if (confirm('Delete this lead?')) {
-      onDeleteLead(leadId);
+      await onDeleteLead(leadId);
     }
   };
 
@@ -978,7 +1124,7 @@ const PartnerView = ({ partner, leads, onLogout, onAddLead, onEditLead, onDelete
 
 const AdminView = ({ adminName, onLogout }) => {
   const { partners, addPartner, updatePartner, deletePartner, getPartnerById } = usePartners();
-  const { leads, addLead, updateLead, deleteLead, initializePartnerLeads, removePartnerLeads } = useLeads();
+  const { leads, addLead, updateLead, deleteLead, removePartnerLeads } = useLeads();
 
   const [activeTab, setActiveTab] = useState('partners');
   const [selectedPartnerId, setSelectedPartnerId] = useState(null);
@@ -994,39 +1140,38 @@ const AdminView = ({ adminName, onLogout }) => {
 
   const selectedPartner = getPartnerById(selectedPartnerId);
 
-  const handleAddPartner = (partnerData) => {
-    const newPartner = addPartner(partnerData);
-    initializePartnerLeads(newPartner.id);
+  const handleAddPartner = async (partnerData) => {
+    await addPartner(partnerData);
     setShowPartnerForm(false);
     setEditingPartner(null);
   };
 
-  const handleUpdatePartner = (partnerData) => {
-    updatePartner(editingPartner.id, partnerData);
+  const handleUpdatePartner = async (partnerData) => {
+    await updatePartner(editingPartner.id, partnerData);
     setShowPartnerForm(false);
     setEditingPartner(null);
   };
 
-  const handleDeletePartner = (partnerId) => {
+  const handleDeletePartner = async (partnerId) => {
     if (confirm('Delete this referral partner and all their leads?')) {
-      deletePartner(partnerId);
-      removePartnerLeads(partnerId);
+      await removePartnerLeads(partnerId);
+      await deletePartner(partnerId);
     }
   };
 
-  const handleSaveLead = (leadData) => {
+  const handleSaveLead = async (leadData) => {
     if (editingLead) {
-      updateLead(selectedPartnerId, editingLead.id, leadData);
+      await updateLead(selectedPartnerId, editingLead.id, leadData);
     } else {
-      addLead(selectedPartnerId, leadData);
+      await addLead(selectedPartnerId, leadData);
     }
     setShowLeadForm(false);
     setEditingLead(null);
   };
 
-  const handleDeleteLead = (leadId) => {
+  const handleDeleteLead = async (leadId) => {
     if (confirm('Delete this lead?')) {
-      deleteLead(selectedPartnerId, leadId);
+      await deleteLead(selectedPartnerId, leadId);
     }
   };
 
