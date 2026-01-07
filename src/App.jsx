@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useCallback, createContext, useContext } from 'react';
 import {
   Plus, Edit2, Trash2, Users, FileSpreadsheet,
-  ArrowLeft, Save, X, ChevronRight, LogOut, Shield, UserCircle
+  ArrowLeft, Save, X, ChevronRight, LogOut, Shield, UserCircle,
+  Package, Download, Upload, ChevronDown, ChevronUp, FileText
 } from 'lucide-react';
 import { supabase } from './lib/supabase';
 
@@ -45,6 +46,12 @@ const INITIAL_PARTNER_FORM = {
   company: '',
 };
 
+const INITIAL_PRODUCT_FORM = {
+  name: '',
+  description: '',
+  ideal_leads: '',
+};
+
 // ============================================================================
 // CUSTOM HOOKS - SUPABASE
 // ============================================================================
@@ -56,7 +63,6 @@ const usePartners = () => {
   const [partners, setPartners] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
 
-  // Fetch partners on mount
   useEffect(() => {
     fetchPartners();
   }, []);
@@ -154,7 +160,6 @@ const useLeads = () => {
   const [leads, setLeads] = useState({});
   const [isLoading, setIsLoading] = useState(true);
 
-  // Fetch all leads on mount
   useEffect(() => {
     fetchAllLeads();
   }, []);
@@ -168,7 +173,6 @@ const useLeads = () => {
 
       if (error) throw error;
 
-      // Group leads by partner_id
       const groupedLeads = (data || []).reduce((acc, lead) => {
         const partnerId = lead.partner_id;
         if (!acc[partnerId]) acc[partnerId] = [];
@@ -282,6 +286,285 @@ const useLeads = () => {
 };
 
 /**
+ * Hook for managing products with Supabase
+ */
+const useProducts = () => {
+  const [products, setProducts] = useState([]);
+  const [productPartners, setProductPartners] = useState({});
+  const [productDocuments, setProductDocuments] = useState({});
+  const [isLoading, setIsLoading] = useState(true);
+
+  useEffect(() => {
+    fetchAll();
+  }, []);
+
+  const fetchAll = async () => {
+    try {
+      // Fetch products
+      const { data: productsData, error: productsError } = await supabase
+        .from('products')
+        .select('*')
+        .order('created_at', { ascending: false });
+
+      if (productsError) throw productsError;
+      setProducts(productsData || []);
+
+      // Fetch product-partner assignments
+      const { data: ppData, error: ppError } = await supabase
+        .from('product_partners')
+        .select('*');
+
+      if (ppError) throw ppError;
+
+      const groupedPP = (ppData || []).reduce((acc, pp) => {
+        if (!acc[pp.product_id]) acc[pp.product_id] = [];
+        acc[pp.product_id].push(pp.partner_id);
+        return acc;
+      }, {});
+      setProductPartners(groupedPP);
+
+      // Fetch product documents
+      const { data: docsData, error: docsError } = await supabase
+        .from('product_documents')
+        .select('*')
+        .order('created_at', { ascending: true });
+
+      if (docsError) throw docsError;
+
+      const groupedDocs = (docsData || []).reduce((acc, doc) => {
+        if (!acc[doc.product_id]) acc[doc.product_id] = [];
+        acc[doc.product_id].push(doc);
+        return acc;
+      }, {});
+      setProductDocuments(groupedDocs);
+
+    } catch (error) {
+      console.error('Error fetching products:', error);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const addProduct = useCallback(async (product, partnerIds, files) => {
+    try {
+      // Create product
+      const { data: productData, error: productError } = await supabase
+        .from('products')
+        .insert([product])
+        .select()
+        .single();
+
+      if (productError) throw productError;
+
+      // Assign partners
+      if (partnerIds.length > 0) {
+        const ppInserts = partnerIds.map(partnerId => ({
+          product_id: productData.id,
+          partner_id: partnerId,
+        }));
+        const { error: ppError } = await supabase
+          .from('product_partners')
+          .insert(ppInserts);
+        if (ppError) throw ppError;
+      }
+
+      // Upload documents
+      const uploadedDocs = [];
+      for (const file of files) {
+        const fileName = `${productData.id}/${Date.now()}-${file.name}`;
+        const { error: uploadError } = await supabase.storage
+          .from('product-documents')
+          .upload(fileName, file);
+
+        if (uploadError) throw uploadError;
+
+        const { data: urlData } = supabase.storage
+          .from('product-documents')
+          .getPublicUrl(fileName);
+
+        const { data: docData, error: docError } = await supabase
+          .from('product_documents')
+          .insert([{
+            product_id: productData.id,
+            file_name: file.name,
+            file_url: urlData.publicUrl,
+            file_type: file.type,
+            file_size: file.size,
+          }])
+          .select()
+          .single();
+
+        if (docError) throw docError;
+        uploadedDocs.push(docData);
+      }
+
+      // Update local state
+      setProducts(prev => [productData, ...prev]);
+      setProductPartners(prev => ({ ...prev, [productData.id]: partnerIds }));
+      setProductDocuments(prev => ({ ...prev, [productData.id]: uploadedDocs }));
+
+      return productData;
+    } catch (error) {
+      console.error('Error adding product:', error);
+      alert('Error adding product: ' + error.message);
+      return null;
+    }
+  }, []);
+
+  const updateProduct = useCallback(async (productId, product, partnerIds, newFiles, removedDocIds) => {
+    try {
+      // Update product
+      const { data: productData, error: productError } = await supabase
+        .from('products')
+        .update(product)
+        .eq('id', productId)
+        .select()
+        .single();
+
+      if (productError) throw productError;
+
+      // Update partner assignments - delete all and re-insert
+      await supabase
+        .from('product_partners')
+        .delete()
+        .eq('product_id', productId);
+
+      if (partnerIds.length > 0) {
+        const ppInserts = partnerIds.map(partnerId => ({
+          product_id: productId,
+          partner_id: partnerId,
+        }));
+        await supabase.from('product_partners').insert(ppInserts);
+      }
+
+      // Remove documents
+      for (const docId of removedDocIds) {
+        const doc = (productDocuments[productId] || []).find(d => d.id === docId);
+        if (doc) {
+          const filePath = doc.file_url.split('/product-documents/')[1];
+          if (filePath) {
+            await supabase.storage.from('product-documents').remove([filePath]);
+          }
+          await supabase.from('product_documents').delete().eq('id', docId);
+        }
+      }
+
+      // Upload new documents
+      const uploadedDocs = [];
+      for (const file of newFiles) {
+        const fileName = `${productId}/${Date.now()}-${file.name}`;
+        const { error: uploadError } = await supabase.storage
+          .from('product-documents')
+          .upload(fileName, file);
+
+        if (uploadError) throw uploadError;
+
+        const { data: urlData } = supabase.storage
+          .from('product-documents')
+          .getPublicUrl(fileName);
+
+        const { data: docData, error: docError } = await supabase
+          .from('product_documents')
+          .insert([{
+            product_id: productId,
+            file_name: file.name,
+            file_url: urlData.publicUrl,
+            file_type: file.type,
+            file_size: file.size,
+          }])
+          .select()
+          .single();
+
+        if (docError) throw docError;
+        uploadedDocs.push(docData);
+      }
+
+      // Update local state
+      setProducts(prev => prev.map(p => p.id === productId ? productData : p));
+      setProductPartners(prev => ({ ...prev, [productId]: partnerIds }));
+      setProductDocuments(prev => ({
+        ...prev,
+        [productId]: [
+          ...(prev[productId] || []).filter(d => !removedDocIds.includes(d.id)),
+          ...uploadedDocs,
+        ],
+      }));
+
+      return productData;
+    } catch (error) {
+      console.error('Error updating product:', error);
+      alert('Error updating product: ' + error.message);
+      return null;
+    }
+  }, [productDocuments]);
+
+  const deleteProduct = useCallback(async (productId) => {
+    try {
+      // Delete documents from storage
+      const docs = productDocuments[productId] || [];
+      for (const doc of docs) {
+        const filePath = doc.file_url.split('/product-documents/')[1];
+        if (filePath) {
+          await supabase.storage.from('product-documents').remove([filePath]);
+        }
+      }
+
+      // Delete product (cascades to product_partners and product_documents)
+      const { error } = await supabase
+        .from('products')
+        .delete()
+        .eq('id', productId);
+
+      if (error) throw error;
+
+      // Update local state
+      setProducts(prev => prev.filter(p => p.id !== productId));
+      setProductPartners(prev => {
+        const newPP = { ...prev };
+        delete newPP[productId];
+        return newPP;
+      });
+      setProductDocuments(prev => {
+        const newDocs = { ...prev };
+        delete newDocs[productId];
+        return newDocs;
+      });
+    } catch (error) {
+      console.error('Error deleting product:', error);
+      alert('Error deleting product');
+    }
+  }, [productDocuments]);
+
+  const getProductsByPartner = useCallback((partnerId) => {
+    return products.filter(product =>
+      (productPartners[product.id] || []).includes(partnerId)
+    );
+  }, [products, productPartners]);
+
+  const getDocumentsByProduct = useCallback((productId) => {
+    return productDocuments[productId] || [];
+  }, [productDocuments]);
+
+  const getPartnersByProduct = useCallback((productId) => {
+    return productPartners[productId] || [];
+  }, [productPartners]);
+
+  return {
+    products,
+    productPartners,
+    productDocuments,
+    isLoading,
+    addProduct,
+    updateProduct,
+    deleteProduct,
+    getProductsByPartner,
+    getDocumentsByProduct,
+    getPartnersByProduct,
+    refetch: fetchAll,
+  };
+};
+
+/**
  * Hook for admin authentication with Supabase
  */
 const useAdminAuth = () => {
@@ -300,7 +583,7 @@ const useAdminAuth = () => {
         .limit(1)
         .single();
 
-      if (error && error.code !== 'PGRST116') throw error; // PGRST116 = no rows
+      if (error && error.code !== 'PGRST116') throw error;
       setAdminData(data);
     } catch (error) {
       console.error('Error fetching admin:', error);
@@ -316,7 +599,7 @@ const useAdminAuth = () => {
         .insert([{
           name: name.trim(),
           email: email.trim().toLowerCase(),
-          password, // Note: In production, hash this!
+          password,
         }])
         .select()
         .single();
@@ -390,7 +673,7 @@ const Button = ({
   className = '',
   ...props
 }) => {
-  const baseStyles = 'inline-flex items-center justify-center gap-2 font-medium rounded-lg transition-colors';
+  const baseStyles = 'inline-flex items-center justify-center gap-2 font-medium rounded-lg transition-colors disabled:opacity-50';
 
   const variants = {
     primary: 'bg-blue-600 text-white hover:bg-blue-700',
@@ -463,20 +746,65 @@ const TextArea = ({ label, required, className = '', ...props }) => (
   </div>
 );
 
-const Modal = ({ isOpen, onClose, title, children }) => {
+const MultiSelect = ({ label, options, selected, onChange, className = '' }) => {
+  const toggleOption = (value) => {
+    if (selected.includes(value)) {
+      onChange(selected.filter(v => v !== value));
+    } else {
+      onChange([...selected, value]);
+    }
+  };
+
+  return (
+    <div className={className}>
+      {label && (
+        <label className="block text-sm font-medium text-gray-700 mb-1">{label}</label>
+      )}
+      <div className="border border-gray-300 rounded-lg p-2 max-h-40 overflow-y-auto">
+        {options.length === 0 ? (
+          <p className="text-gray-400 text-sm p-1">No options available</p>
+        ) : (
+          options.map(opt => (
+            <label key={opt.value} className="flex items-center gap-2 p-1 hover:bg-gray-50 rounded cursor-pointer">
+              <input
+                type="checkbox"
+                checked={selected.includes(opt.value)}
+                onChange={() => toggleOption(opt.value)}
+                className="rounded border-gray-300"
+              />
+              <span className="text-sm text-gray-700">{opt.label}</span>
+            </label>
+          ))
+        )}
+      </div>
+      {selected.length > 0 && (
+        <p className="text-xs text-gray-500 mt-1">{selected.length} selected</p>
+      )}
+    </div>
+  );
+};
+
+const Modal = ({ isOpen, onClose, title, children, size = 'md' }) => {
   if (!isOpen) return null;
+
+  const sizes = {
+    sm: 'max-w-sm',
+    md: 'max-w-md',
+    lg: 'max-w-lg',
+    xl: 'max-w-xl',
+  };
 
   return (
     <div className="fixed inset-0 bg-black/50 z-50 overflow-y-auto">
       <div className="min-h-full flex items-center justify-center p-4">
-        <div className="bg-white rounded-lg w-full max-w-md my-8">
+        <div className={`bg-white rounded-lg w-full ${sizes[size]} my-8`}>
           <div className="flex justify-between items-center p-4 border-b border-gray-200">
             <h3 className="font-medium text-gray-900">{title}</h3>
             <button onClick={onClose} className="text-gray-400 hover:text-gray-600">
               <X className="w-5 h-5" />
             </button>
           </div>
-          <div className="p-4">{children}</div>
+          <div className="p-4 max-h-[70vh] overflow-y-auto">{children}</div>
         </div>
       </div>
     </div>
@@ -634,81 +962,172 @@ const LeadForm = ({ lead, onSave, onClose }) => {
   return (
     <Modal isOpen onClose={onClose} title={lead ? 'Edit Lead' : 'Add Lead'}>
       <div className="space-y-4">
+        <Input label="Name" required value={formData.name} onChange={handleChange('name')} placeholder="Contact name" />
+        <Input label="Email" required type="email" value={formData.email} onChange={handleChange('email')} placeholder="contact@company.com" />
+        <Input label="Phone" type="tel" value={formData.phone || ''} onChange={handleChange('phone')} placeholder="(555) 123-4567" />
+        <Input label="Company" required value={formData.company} onChange={handleChange('company')} placeholder="Company name" />
+        <Input label="Title" value={formData.title || ''} onChange={handleChange('title')} placeholder="Job title" />
+        <Input label="Company URL" type="url" value={formData.company_url || ''} onChange={handleChange('company_url')} placeholder="https://company.com" />
+        <Input label="Industry" value={formData.industry || ''} onChange={handleChange('industry')} placeholder="e.g. Technology, Healthcare" />
+        <Input label="Headcount" value={formData.headcount || ''} onChange={handleChange('headcount')} placeholder="e.g. 50, 100-500" />
+        <Select label="Status" required value={formData.status} onChange={handleChange('status')} options={STATUS_OPTIONS} />
+        <TextArea label="Notes" value={formData.notes || ''} onChange={handleChange('notes')} rows={3} placeholder="Additional notes..." />
+        <div className="flex gap-3 pt-2">
+          <Button variant="secondary" onClick={onClose} className="flex-1">Cancel</Button>
+          <Button onClick={handleSubmit} className="flex-1"><Save className="w-4 h-4" />Save</Button>
+        </div>
+      </div>
+    </Modal>
+  );
+};
+
+const ProductForm = ({ product, partners, existingPartnerIds, existingDocuments, onSave, onClose }) => {
+  const [formData, setFormData] = useState(product || INITIAL_PRODUCT_FORM);
+  const [selectedPartners, setSelectedPartners] = useState(existingPartnerIds || []);
+  const [files, setFiles] = useState([]);
+  const [existingDocs, setExistingDocs] = useState(existingDocuments || []);
+  const [removedDocIds, setRemovedDocIds] = useState([]);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
+  const handleChange = (field) => (e) => {
+    setFormData(prev => ({ ...prev, [field]: e.target.value }));
+  };
+
+  const handleFileChange = (e) => {
+    const newFiles = Array.from(e.target.files);
+    const totalDocs = existingDocs.length - removedDocIds.length + files.length + newFiles.length;
+    if (totalDocs > 5) {
+      alert('Maximum 5 documents allowed');
+      return;
+    }
+    setFiles(prev => [...prev, ...newFiles]);
+  };
+
+  const removeNewFile = (index) => {
+    setFiles(prev => prev.filter((_, i) => i !== index));
+  };
+
+  const removeExistingDoc = (docId) => {
+    setRemovedDocIds(prev => [...prev, docId]);
+  };
+
+  const handleSubmit = async () => {
+    if (!formData.name.trim()) {
+      alert('Product name is required');
+      return;
+    }
+
+    setIsSubmitting(true);
+    try {
+      await onSave(
+        {
+          name: formData.name.trim(),
+          description: formData.description?.trim() || '',
+          ideal_leads: formData.ideal_leads?.trim() || '',
+        },
+        selectedPartners,
+        files,
+        removedDocIds
+      );
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const partnerOptions = partners.map(p => ({
+    value: p.id,
+    label: `${p.name} (${p.email})`,
+  }));
+
+  const currentDocsCount = existingDocs.length - removedDocIds.length + files.length;
+
+  return (
+    <Modal isOpen onClose={onClose} title={product ? 'Edit Product' : 'Add Product'} size="lg">
+      <div className="space-y-4">
         <Input
-          label="Name"
+          label="Product Name"
           required
           value={formData.name}
           onChange={handleChange('name')}
-          placeholder="Contact name"
-        />
-        <Input
-          label="Email"
-          required
-          type="email"
-          value={formData.email}
-          onChange={handleChange('email')}
-          placeholder="contact@company.com"
-        />
-        <Input
-          label="Phone"
-          type="tel"
-          value={formData.phone || ''}
-          onChange={handleChange('phone')}
-          placeholder="(555) 123-4567"
-        />
-        <Input
-          label="Company"
-          required
-          value={formData.company}
-          onChange={handleChange('company')}
-          placeholder="Company name"
-        />
-        <Input
-          label="Title"
-          value={formData.title || ''}
-          onChange={handleChange('title')}
-          placeholder="Job title"
-        />
-        <Input
-          label="Company URL"
-          type="url"
-          value={formData.company_url || ''}
-          onChange={handleChange('company_url')}
-          placeholder="https://company.com"
-        />
-        <Input
-          label="Industry"
-          value={formData.industry || ''}
-          onChange={handleChange('industry')}
-          placeholder="e.g. Technology, Healthcare"
-        />
-        <Input
-          label="Headcount"
-          value={formData.headcount || ''}
-          onChange={handleChange('headcount')}
-          placeholder="e.g. 50, 100-500"
-        />
-        <Select
-          label="Status"
-          required
-          value={formData.status}
-          onChange={handleChange('status')}
-          options={STATUS_OPTIONS}
+          placeholder="Enter product name"
         />
         <TextArea
-          label="Notes"
-          value={formData.notes || ''}
-          onChange={handleChange('notes')}
+          label="Description"
+          value={formData.description || ''}
+          onChange={handleChange('description')}
           rows={3}
-          placeholder="Additional notes..."
+          placeholder="Describe the product..."
         />
+        <TextArea
+          label="Ideal Leads"
+          value={formData.ideal_leads || ''}
+          onChange={handleChange('ideal_leads')}
+          rows={3}
+          placeholder="Describe ideal lead characteristics..."
+        />
+
+        <MultiSelect
+          label="Assign Partners"
+          options={partnerOptions}
+          selected={selectedPartners}
+          onChange={setSelectedPartners}
+        />
+
+        <div>
+          <label className="block text-sm font-medium text-gray-700 mb-1">
+            Documents ({currentDocsCount}/5)
+          </label>
+
+          {/* Existing documents */}
+          {existingDocs.filter(d => !removedDocIds.includes(d.id)).map(doc => (
+            <div key={doc.id} className="flex items-center gap-2 p-2 bg-gray-50 rounded mb-2">
+              <FileText className="w-4 h-4 text-gray-400" />
+              <span className="text-sm text-gray-700 flex-1 truncate">{doc.file_name}</span>
+              <button
+                type="button"
+                onClick={() => removeExistingDoc(doc.id)}
+                className="text-red-500 hover:text-red-700"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+          ))}
+
+          {/* New files to upload */}
+          {files.map((file, index) => (
+            <div key={index} className="flex items-center gap-2 p-2 bg-blue-50 rounded mb-2">
+              <Upload className="w-4 h-4 text-blue-400" />
+              <span className="text-sm text-blue-700 flex-1 truncate">{file.name}</span>
+              <button
+                type="button"
+                onClick={() => removeNewFile(index)}
+                className="text-red-500 hover:text-red-700"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+          ))}
+
+          {currentDocsCount < 5 && (
+            <label className="flex items-center justify-center gap-2 p-4 border-2 border-dashed border-gray-300 rounded-lg cursor-pointer hover:border-blue-400 transition-colors">
+              <Upload className="w-5 h-5 text-gray-400" />
+              <span className="text-sm text-gray-500">Click to upload documents</span>
+              <input
+                type="file"
+                multiple
+                onChange={handleFileChange}
+                className="hidden"
+              />
+            </label>
+          )}
+        </div>
+
         <div className="flex gap-3 pt-2">
-          <Button variant="secondary" onClick={onClose} className="flex-1">
+          <Button variant="secondary" onClick={onClose} className="flex-1" disabled={isSubmitting}>
             Cancel
           </Button>
-          <Button onClick={handleSubmit} className="flex-1">
-            <Save className="w-4 h-4" />
-            Save
+          <Button onClick={handleSubmit} className="flex-1" disabled={isSubmitting}>
+            {isSubmitting ? 'Saving...' : <><Save className="w-4 h-4" />Save</>}
           </Button>
         </div>
       </div>
@@ -805,6 +1224,145 @@ const LeadsTable = ({ leads, onEdit, onDelete }) => (
     </table>
   </div>
 );
+
+const ProductsTable = ({ products, productPartners, partners, onEdit, onDelete }) => (
+  <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
+    <table className="w-full">
+      <thead className="bg-gray-50 border-b border-gray-200">
+        <tr>
+          <th className="text-left px-6 py-3 text-xs font-medium text-gray-500 uppercase">Name</th>
+          <th className="text-left px-6 py-3 text-xs font-medium text-gray-500 uppercase">Description</th>
+          <th className="text-left px-6 py-3 text-xs font-medium text-gray-500 uppercase">Partners</th>
+          <th className="text-left px-6 py-3 text-xs font-medium text-gray-500 uppercase">Created</th>
+          <th className="text-right px-6 py-3 text-xs font-medium text-gray-500 uppercase">Actions</th>
+        </tr>
+      </thead>
+      <tbody className="divide-y divide-gray-200">
+        {products.map(product => {
+          const partnerIds = productPartners[product.id] || [];
+          const partnerNames = partnerIds
+            .map(id => partners.find(p => p.id === id)?.name)
+            .filter(Boolean);
+
+          return (
+            <tr key={product.id} className="hover:bg-gray-50">
+              <td className="px-6 py-4 text-sm text-gray-900 font-medium">{product.name}</td>
+              <td className="px-6 py-4 text-sm text-gray-500 max-w-xs truncate">{product.description || '-'}</td>
+              <td className="px-6 py-4 text-sm text-gray-500">
+                {partnerNames.length > 0 ? (
+                  <span title={partnerNames.join(', ')}>
+                    {partnerNames.length} partner{partnerNames.length !== 1 ? 's' : ''}
+                  </span>
+                ) : '-'}
+              </td>
+              <td className="px-6 py-4 text-sm text-gray-500">
+                {product.created_at ? new Date(product.created_at).toLocaleDateString() : '-'}
+              </td>
+              <td className="px-6 py-4 text-right">
+                <Button variant="ghost" size="sm" onClick={() => onEdit(product)}>
+                  <Edit2 className="w-4 h-4" />
+                </Button>
+                <Button variant="danger" size="sm" onClick={() => onDelete(product.id)}>
+                  <Trash2 className="w-4 h-4" />
+                </Button>
+              </td>
+            </tr>
+          );
+        })}
+      </tbody>
+    </table>
+  </div>
+);
+
+// ============================================================================
+// PRODUCT INFO COMPONENT (FOR PARTNER VIEW)
+// ============================================================================
+
+const ProductInfoSection = ({ products, getDocumentsByProduct }) => {
+  const [expandedProducts, setExpandedProducts] = useState({});
+
+  const toggleProduct = (productId) => {
+    setExpandedProducts(prev => ({
+      ...prev,
+      [productId]: !prev[productId],
+    }));
+  };
+
+  if (products.length === 0) return null;
+
+  return (
+    <div className="mb-6">
+      <h3 className="text-sm font-medium text-gray-500 uppercase mb-3">Your Products</h3>
+      <div className="space-y-3">
+        {products.map(product => {
+          const isExpanded = expandedProducts[product.id];
+          const documents = getDocumentsByProduct(product.id);
+
+          return (
+            <div key={product.id} className="bg-white rounded-lg border border-gray-200 overflow-hidden">
+              <button
+                onClick={() => toggleProduct(product.id)}
+                className="w-full px-4 py-3 flex items-center justify-between hover:bg-gray-50 transition-colors"
+              >
+                <div className="flex items-center gap-3">
+                  <Package className="w-5 h-5 text-blue-500" />
+                  <span className="font-medium text-gray-900">{product.name}</span>
+                </div>
+                {isExpanded ? (
+                  <ChevronUp className="w-5 h-5 text-gray-400" />
+                ) : (
+                  <ChevronDown className="w-5 h-5 text-gray-400" />
+                )}
+              </button>
+
+              {isExpanded && (
+                <div className="px-4 pb-4 border-t border-gray-100">
+                  {product.description && (
+                    <div className="mt-3">
+                      <h4 className="text-xs font-medium text-gray-500 uppercase mb-1">Description</h4>
+                      <p className="text-sm text-gray-700">{product.description}</p>
+                    </div>
+                  )}
+
+                  {product.ideal_leads && (
+                    <div className="mt-3">
+                      <h4 className="text-xs font-medium text-gray-500 uppercase mb-1">Ideal Leads</h4>
+                      <p className="text-sm text-gray-700">{product.ideal_leads}</p>
+                    </div>
+                  )}
+
+                  {documents.length > 0 && (
+                    <div className="mt-3">
+                      <h4 className="text-xs font-medium text-gray-500 uppercase mb-2">Documents</h4>
+                      <div className="space-y-2">
+                        {documents.map(doc => (
+                          <a
+                            key={doc.id}
+                            href={doc.file_url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="flex items-center gap-2 p-2 bg-gray-50 rounded hover:bg-gray-100 transition-colors"
+                          >
+                            <Download className="w-4 h-4 text-blue-500" />
+                            <span className="text-sm text-gray-700 flex-1 truncate">{doc.file_name}</span>
+                          </a>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {!product.description && !product.ideal_leads && documents.length === 0 && (
+                    <p className="mt-3 text-sm text-gray-400">No additional information available.</p>
+                  )}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+};
 
 // ============================================================================
 // AUTH COMPONENTS
@@ -1064,7 +1622,7 @@ const LoginScreen = ({ onSuperadminLogin, onPartnerLogin, hasPartners }) => {
 // VIEW COMPONENTS
 // ============================================================================
 
-const PartnerView = ({ partner, leads, onLogout, onAddLead, onEditLead, onDeleteLead }) => {
+const PartnerView = ({ partner, leads, products, getDocumentsByProduct, onLogout, onAddLead, onEditLead, onDeleteLead }) => {
   const [showLeadForm, setShowLeadForm] = useState(false);
   const [editingLead, setEditingLead] = useState(null);
 
@@ -1094,6 +1652,8 @@ const PartnerView = ({ partner, leads, onLogout, onAddLead, onEditLead, onDelete
       <Header title="My Leads" subtitle={`Welcome, ${partner.name}`} onLogout={onLogout} />
 
       <main className="p-6">
+        <ProductInfoSection products={products} getDocumentsByProduct={getDocumentsByProduct} />
+
         <div className="flex justify-between items-center mb-6">
           <h2 className="text-lg font-medium text-gray-900">
             {leads.length} Lead{leads.length !== 1 ? 's' : ''}
@@ -1125,17 +1685,21 @@ const PartnerView = ({ partner, leads, onLogout, onAddLead, onEditLead, onDelete
 const AdminView = ({ adminName, onLogout }) => {
   const { partners, addPartner, updatePartner, deletePartner, getPartnerById } = usePartners();
   const { leads, addLead, updateLead, deleteLead, removePartnerLeads } = useLeads();
+  const { products, productPartners, addProduct, updateProduct, deleteProduct, getDocumentsByProduct, getPartnersByProduct } = useProducts();
 
   const [activeTab, setActiveTab] = useState('partners');
   const [selectedPartnerId, setSelectedPartnerId] = useState(null);
   const [showPartnerForm, setShowPartnerForm] = useState(false);
   const [showLeadForm, setShowLeadForm] = useState(false);
+  const [showProductForm, setShowProductForm] = useState(false);
   const [editingPartner, setEditingPartner] = useState(null);
   const [editingLead, setEditingLead] = useState(null);
+  const [editingProduct, setEditingProduct] = useState(null);
 
   const tabs = [
     { id: 'partners', label: 'Referral Partners', icon: Users },
     { id: 'leads', label: 'Leads', icon: FileSpreadsheet },
+    { id: 'products', label: 'Products', icon: Package },
   ];
 
   const selectedPartner = getPartnerById(selectedPartnerId);
@@ -1172,6 +1736,22 @@ const AdminView = ({ adminName, onLogout }) => {
   const handleDeleteLead = async (leadId) => {
     if (confirm('Delete this lead?')) {
       await deleteLead(selectedPartnerId, leadId);
+    }
+  };
+
+  const handleSaveProduct = async (productData, partnerIds, files, removedDocIds) => {
+    if (editingProduct) {
+      await updateProduct(editingProduct.id, productData, partnerIds, files, removedDocIds);
+    } else {
+      await addProduct(productData, partnerIds, files);
+    }
+    setShowProductForm(false);
+    setEditingProduct(null);
+  };
+
+  const handleDeleteProduct = async (productId) => {
+    if (confirm('Delete this product and all its documents?')) {
+      await deleteProduct(productId);
     }
   };
 
@@ -1260,6 +1840,31 @@ const AdminView = ({ adminName, onLogout }) => {
             )}
           </div>
         )}
+
+        {/* Products Tab */}
+        {activeTab === 'products' && (
+          <div>
+            <div className="flex justify-between items-center mb-6">
+              <h2 className="text-lg font-medium text-gray-900">Products</h2>
+              <Button onClick={() => { setEditingProduct(null); setShowProductForm(true); }}>
+                <Plus className="w-4 h-4" />
+                Add Product
+              </Button>
+            </div>
+
+            {products.length === 0 ? (
+              <EmptyState icon={Package} title="No products yet" description="Add your first product to get started" />
+            ) : (
+              <ProductsTable
+                products={products}
+                productPartners={productPartners}
+                partners={partners}
+                onEdit={(product) => { setEditingProduct(product); setShowProductForm(true); }}
+                onDelete={handleDeleteProduct}
+              />
+            )}
+          </div>
+        )}
       </main>
 
       {showPartnerForm && (
@@ -1277,6 +1882,17 @@ const AdminView = ({ adminName, onLogout }) => {
           onClose={() => { setShowLeadForm(false); setEditingLead(null); }}
         />
       )}
+
+      {showProductForm && (
+        <ProductForm
+          product={editingProduct}
+          partners={partners}
+          existingPartnerIds={editingProduct ? getPartnersByProduct(editingProduct.id) : []}
+          existingDocuments={editingProduct ? getDocumentsByProduct(editingProduct.id) : []}
+          onSave={handleSaveProduct}
+          onClose={() => { setShowProductForm(false); setEditingProduct(null); }}
+        />
+      )}
     </div>
   );
 };
@@ -1292,6 +1908,7 @@ export default function App() {
 
   const { partners, getPartnerByEmail } = usePartners();
   const { leads, addLead, updateLead, deleteLead, getLeadsByPartner } = useLeads();
+  const { getProductsByPartner, getDocumentsByProduct } = useProducts();
 
   const handleLogout = () => {
     setUserType(null);
@@ -1330,6 +1947,8 @@ export default function App() {
       <PartnerView
         partner={currentPartner}
         leads={getLeadsByPartner(currentPartner.id)}
+        products={getProductsByPartner(currentPartner.id)}
+        getDocumentsByProduct={getDocumentsByProduct}
         onLogout={handleLogout}
         onAddLead={(leadData) => addLead(currentPartner.id, leadData)}
         onEditLead={(leadId, leadData) => updateLead(currentPartner.id, leadId, leadData)}
