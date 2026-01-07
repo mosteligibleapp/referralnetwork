@@ -57,6 +57,7 @@ const INITIAL_PRODUCT_FORM = {
   name: '',
   description: '',
   ideal_leads: '',
+  url: '',
 };
 
 // ============================================================================
@@ -1117,6 +1118,7 @@ const ProductForm = ({ product, partners, existingPartnerIds, existingDocuments,
           name: formData.name.trim(),
           description: formData.description?.trim() || '',
           ideal_leads: formData.ideal_leads?.trim() || '',
+          url: formData.url?.trim() || '',
         },
         selectedPartners,
         files,
@@ -1157,6 +1159,13 @@ const ProductForm = ({ product, partners, existingPartnerIds, existingDocuments,
           onChange={handleChange('ideal_leads')}
           rows={3}
           placeholder="Describe ideal lead characteristics..."
+        />
+        <Input
+          label="Product URL"
+          type="url"
+          value={formData.url || ''}
+          onChange={handleChange('url')}
+          placeholder="https://example.com/product-info"
         />
 
         <MultiSelect
@@ -1331,12 +1340,13 @@ const LeadsTable = ({ leads, onEdit, onDelete, getOwnerName, showPartnerColumn =
 );
 
 const ProductsTable = ({ products, productPartners, partners, onEdit, onDelete }) => (
-  <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
+  <div className="bg-white rounded-lg border border-gray-200 overflow-hidden overflow-x-auto">
     <table className="w-full">
       <thead className="bg-gray-50 border-b border-gray-200">
         <tr>
           <th className="text-left px-6 py-3 text-xs font-medium text-gray-500 uppercase">Name</th>
           <th className="text-left px-6 py-3 text-xs font-medium text-gray-500 uppercase">Description</th>
+          <th className="text-left px-6 py-3 text-xs font-medium text-gray-500 uppercase">URL</th>
           <th className="text-left px-6 py-3 text-xs font-medium text-gray-500 uppercase">Partners</th>
           <th className="text-left px-6 py-3 text-xs font-medium text-gray-500 uppercase">Created</th>
           <th className="text-right px-6 py-3 text-xs font-medium text-gray-500 uppercase">Actions</th>
@@ -1353,6 +1363,13 @@ const ProductsTable = ({ products, productPartners, partners, onEdit, onDelete }
             <tr key={product.id} className="hover:bg-gray-50">
               <td className="px-6 py-4 text-sm text-gray-900 font-medium">{product.name}</td>
               <td className="px-6 py-4 text-sm text-gray-500 max-w-xs truncate">{product.description || '-'}</td>
+              <td className="px-6 py-4 text-sm text-gray-500 max-w-[200px] truncate">
+                {product.url ? (
+                  <a href={product.url} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline">
+                    {product.url}
+                  </a>
+                ) : '-'}
+              </td>
               <td className="px-6 py-4 text-sm text-gray-500">
                 {partnerNames.length > 0 ? (
                   <span title={partnerNames.join(', ')}>
@@ -1433,6 +1450,20 @@ const ProductInfoSection = ({ products, getDocumentsByProduct }) => {
                     <div className="mt-3">
                       <h4 className="text-xs font-medium text-gray-500 uppercase mb-1">Ideal Leads</h4>
                       <p className="text-sm text-gray-700">{product.ideal_leads}</p>
+                    </div>
+                  )}
+
+                  {product.url && (
+                    <div className="mt-3">
+                      <h4 className="text-xs font-medium text-gray-500 uppercase mb-1">Product Link</h4>
+                      <a
+                        href={product.url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-sm text-blue-600 hover:underline"
+                      >
+                        {product.url}
+                      </a>
                     </div>
                   )}
 
