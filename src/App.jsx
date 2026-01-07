@@ -60,6 +60,12 @@ const INITIAL_PRODUCT_FORM = {
   url: '',
 };
 
+const INITIAL_PARTNER_PRODUCT_FORM = {
+  name: '',
+  description: '',
+  url: '',
+};
+
 // ============================================================================
 // CUSTOM HOOKS - SUPABASE
 // ============================================================================
@@ -311,6 +317,97 @@ const useLeads = () => {
     getLeadsByOwnerFilter,
     removePartnerLeads,
     refetch: fetchAllLeads,
+  };
+};
+
+/**
+ * Hook for managing partner-submitted products (products partners want promoted)
+ */
+const usePartnerProducts = () => {
+  const [partnerProducts, setPartnerProducts] = useState([]);
+  const [isLoading, setIsLoading] = useState(true);
+
+  useEffect(() => {
+    fetchPartnerProducts();
+  }, []);
+
+  const fetchPartnerProducts = async () => {
+    try {
+      const { data, error } = await supabase
+        .from('partner_products')
+        .select('*')
+        .order('created_at', { ascending: false });
+
+      if (error) throw error;
+      setPartnerProducts(data || []);
+    } catch (error) {
+      console.error('Error fetching partner products:', error);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const getPartnerProduct = useCallback((partnerId) => {
+    return partnerProducts.find(p => p.partner_id === partnerId) || null;
+  }, [partnerProducts]);
+
+  const savePartnerProduct = useCallback(async (partnerId, productData) => {
+    try {
+      const existing = partnerProducts.find(p => p.partner_id === partnerId);
+
+      if (existing) {
+        // Update existing
+        const { data, error } = await supabase
+          .from('partner_products')
+          .update(productData)
+          .eq('partner_id', partnerId)
+          .select()
+          .single();
+
+        if (error) throw error;
+        setPartnerProducts(prev => prev.map(p => p.partner_id === partnerId ? data : p));
+        return data;
+      } else {
+        // Create new
+        const { data, error } = await supabase
+          .from('partner_products')
+          .insert([{ ...productData, partner_id: partnerId }])
+          .select()
+          .single();
+
+        if (error) throw error;
+        setPartnerProducts(prev => [data, ...prev]);
+        return data;
+      }
+    } catch (error) {
+      console.error('Error saving partner product:', error);
+      alert('Error saving product');
+      return null;
+    }
+  }, [partnerProducts]);
+
+  const deletePartnerProduct = useCallback(async (partnerId) => {
+    try {
+      const { error } = await supabase
+        .from('partner_products')
+        .delete()
+        .eq('partner_id', partnerId);
+
+      if (error) throw error;
+      setPartnerProducts(prev => prev.filter(p => p.partner_id !== partnerId));
+    } catch (error) {
+      console.error('Error deleting partner product:', error);
+      alert('Error deleting product');
+    }
+  }, []);
+
+  return {
+    partnerProducts,
+    isLoading,
+    getPartnerProduct,
+    savePartnerProduct,
+    deletePartnerProduct,
+    refetch: fetchPartnerProducts,
   };
 };
 
@@ -1758,9 +1855,19 @@ const LoginScreen = ({ onSuperadminLogin, onPartnerLogin, hasPartners }) => {
 // VIEW COMPONENTS
 // ============================================================================
 
-const PartnerView = ({ partner, leads, products, getDocumentsByProduct, adminName, getPartnerById, onLogout, onAddLead, onEditLead, onDeleteLead }) => {
+const PartnerView = ({ partner, leads, products, getDocumentsByProduct, adminName, getPartnerById, partnerProduct, onSavePartnerProduct, onLogout, onAddLead, onEditLead, onDeleteLead }) => {
+  const [activeTab, setActiveTab] = useState('leads');
   const [showLeadForm, setShowLeadForm] = useState(false);
   const [editingLead, setEditingLead] = useState(null);
+  const [productForm, setProductForm] = useState(partnerProduct || INITIAL_PARTNER_PRODUCT_FORM);
+  const [isSavingProduct, setIsSavingProduct] = useState(false);
+
+  // Update product form when partnerProduct changes
+  useEffect(() => {
+    if (partnerProduct) {
+      setProductForm(partnerProduct);
+    }
+  }, [partnerProduct]);
 
   const handleSaveLead = async (leadData) => {
     if (editingLead) {
@@ -1783,12 +1890,33 @@ const PartnerView = ({ partner, leads, products, getDocumentsByProduct, adminNam
     }
   };
 
+  const handleProductChange = (field) => (e) => {
+    setProductForm(prev => ({ ...prev, [field]: e.target.value }));
+  };
+
+  const handleSaveProduct = async () => {
+    if (!productForm.name?.trim()) {
+      alert('Product name is required');
+      return;
+    }
+    setIsSavingProduct(true);
+    try {
+      await onSavePartnerProduct({
+        name: productForm.name.trim(),
+        description: productForm.description?.trim() || '',
+        url: productForm.url?.trim() || '',
+      });
+      alert('Product saved successfully!');
+    } finally {
+      setIsSavingProduct(false);
+    }
+  };
+
   // Helper to get owner name
   const getOwnerName = (lead) => {
     if (lead.owner_type === 'superadmin') {
       return adminName || 'Admin';
     }
-    // If owner is a partner, get their name
     if (getPartnerById) {
       const ownerPartner = getPartnerById(lead.owner_id);
       return ownerPartner?.name || partner.name;
@@ -1796,27 +1924,86 @@ const PartnerView = ({ partner, leads, products, getDocumentsByProduct, adminNam
     return partner.name;
   };
 
+  const tabs = [
+    { id: 'leads', label: 'My Leads', icon: FileSpreadsheet },
+    { id: 'myProduct', label: 'My Product', icon: Package },
+  ];
+
   return (
     <div className="min-h-screen bg-gray-50">
-      <Header title="My Leads" subtitle={`Welcome, ${partner.name}`} onLogout={onLogout} />
+      <Header title="Partner Portal" subtitle={`Welcome, ${partner.name}`} onLogout={onLogout} />
+      <TabNav tabs={tabs} activeTab={activeTab} onTabChange={setActiveTab} />
 
       <main className="p-6">
-        <ProductInfoSection products={products} getDocumentsByProduct={getDocumentsByProduct} />
+        {/* Leads Tab */}
+        {activeTab === 'leads' && (
+          <>
+            <ProductInfoSection products={products} getDocumentsByProduct={getDocumentsByProduct} />
 
-        <div className="flex justify-between items-center mb-6">
-          <h2 className="text-lg font-medium text-gray-900">
-            {leads.length} Lead{leads.length !== 1 ? 's' : ''}
-          </h2>
-          <Button onClick={() => { setEditingLead(null); setShowLeadForm(true); }}>
-            <Plus className="w-4 h-4" />
-            Add Lead
-          </Button>
-        </div>
+            <div className="flex justify-between items-center mb-6">
+              <h2 className="text-lg font-medium text-gray-900">
+                {leads.length} Lead{leads.length !== 1 ? 's' : ''}
+              </h2>
+              <Button onClick={() => { setEditingLead(null); setShowLeadForm(true); }}>
+                <Plus className="w-4 h-4" />
+                Add Lead
+              </Button>
+            </div>
 
-        {leads.length === 0 ? (
-          <EmptyState icon={FileSpreadsheet} title="No leads yet" description="Add your first lead to get started" />
-        ) : (
-          <LeadsTable leads={leads} onEdit={handleEditLead} onDelete={handleDeleteLead} getOwnerName={getOwnerName} />
+            {leads.length === 0 ? (
+              <EmptyState icon={FileSpreadsheet} title="No leads yet" description="Add your first lead to get started" />
+            ) : (
+              <LeadsTable leads={leads} onEdit={handleEditLead} onDelete={handleDeleteLead} getOwnerName={getOwnerName} />
+            )}
+          </>
+        )}
+
+        {/* My Product Tab */}
+        {activeTab === 'myProduct' && (
+          <div>
+            <h2 className="text-lg font-medium text-gray-900 mb-2">Submit Your Product</h2>
+            <p className="text-sm text-gray-500 mb-6">
+              Share a product you'd like us to promote to our network. You can submit one product.
+            </p>
+
+            <div className="bg-white rounded-lg border border-gray-200 p-6 max-w-2xl">
+              <div className="space-y-4">
+                <Input
+                  label="Product Name"
+                  required
+                  value={productForm.name || ''}
+                  onChange={handleProductChange('name')}
+                  placeholder="Enter your product name"
+                />
+                <TextArea
+                  label="Description"
+                  value={productForm.description || ''}
+                  onChange={handleProductChange('description')}
+                  rows={4}
+                  placeholder="Describe your product and why it would be valuable to our network..."
+                />
+                <Input
+                  label="Product URL"
+                  type="url"
+                  value={productForm.url || ''}
+                  onChange={handleProductChange('url')}
+                  placeholder="https://your-product-website.com"
+                />
+                <div className="pt-2">
+                  <Button onClick={handleSaveProduct} disabled={isSavingProduct}>
+                    <Save className="w-4 h-4" />
+                    {isSavingProduct ? 'Saving...' : (partnerProduct ? 'Update Product' : 'Submit Product')}
+                  </Button>
+                </div>
+              </div>
+
+              {partnerProduct && (
+                <p className="text-xs text-gray-400 mt-4">
+                  Last updated: {new Date(partnerProduct.created_at).toLocaleDateString()}
+                </p>
+              )}
+            </div>
+          </div>
         )}
       </main>
 
@@ -1835,6 +2022,7 @@ const AdminView = ({ adminName, adminId, onLogout }) => {
   const { partners, addPartner, updatePartner, deletePartner, getPartnerById } = usePartners();
   const { leads, allLeads, addLead, updateLead, deleteLead, removePartnerLeads, getLeadsByOwnerFilter } = useLeads();
   const { products, productPartners, addProduct, updateProduct, deleteProduct, getDocumentsByProduct, getPartnersByProduct } = useProducts();
+  const { partnerProducts } = usePartnerProducts();
 
   const [activeTab, setActiveTab] = useState('partners');
   const [selectedPartnerId, setSelectedPartnerId] = useState(null);
@@ -1852,6 +2040,7 @@ const AdminView = ({ adminName, adminId, onLogout }) => {
     { id: 'partners', label: 'Referral Partners', icon: Users },
     { id: 'leads', label: 'Leads', icon: FileSpreadsheet },
     { id: 'products', label: 'Products', icon: Package },
+    { id: 'partnerProducts', label: 'Partner Products', icon: UserCircle },
   ];
 
   const selectedPartner = getPartnerById(selectedPartnerId);
@@ -2127,6 +2316,61 @@ const AdminView = ({ adminName, adminId, onLogout }) => {
             )}
           </div>
         )}
+
+        {/* Partner Products Tab */}
+        {activeTab === 'partnerProducts' && (
+          <div>
+            <h2 className="text-lg font-medium text-gray-900 mb-2">Partner-Submitted Products</h2>
+            <p className="text-sm text-gray-500 mb-6">
+              Products that referral partners want you to promote.
+            </p>
+
+            {partnerProducts.length === 0 ? (
+              <EmptyState icon={Package} title="No partner products yet" description="Partners can submit products they'd like promoted" />
+            ) : (
+              <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
+                <table className="w-full">
+                  <thead className="bg-gray-50 border-b border-gray-200">
+                    <tr>
+                      <th className="text-left px-6 py-3 text-xs font-medium text-gray-500 uppercase">Partner</th>
+                      <th className="text-left px-6 py-3 text-xs font-medium text-gray-500 uppercase">Product Name</th>
+                      <th className="text-left px-6 py-3 text-xs font-medium text-gray-500 uppercase">Description</th>
+                      <th className="text-left px-6 py-3 text-xs font-medium text-gray-500 uppercase">URL</th>
+                      <th className="text-left px-6 py-3 text-xs font-medium text-gray-500 uppercase">Submitted</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-200">
+                    {partnerProducts.map(pp => {
+                      const partnerInfo = getPartnerById(pp.partner_id);
+                      return (
+                        <tr key={pp.id} className="hover:bg-gray-50">
+                          <td className="px-6 py-4 text-sm text-gray-900 font-medium">
+                            {partnerInfo?.name || 'Unknown Partner'}
+                            {partnerInfo?.company && (
+                              <span className="text-gray-500 font-normal"> ({partnerInfo.company})</span>
+                            )}
+                          </td>
+                          <td className="px-6 py-4 text-sm text-gray-900">{pp.name}</td>
+                          <td className="px-6 py-4 text-sm text-gray-500 max-w-xs truncate">{pp.description || '-'}</td>
+                          <td className="px-6 py-4 text-sm">
+                            {pp.url ? (
+                              <a href={pp.url} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline truncate block max-w-[200px]">
+                                {pp.url}
+                              </a>
+                            ) : '-'}
+                          </td>
+                          <td className="px-6 py-4 text-sm text-gray-500">
+                            {pp.created_at ? new Date(pp.created_at).toLocaleDateString() : '-'}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        )}
       </main>
 
       {showPartnerForm && (
@@ -2181,6 +2425,7 @@ export default function App() {
   const { partners, getPartnerByEmail, getPartnerById } = usePartners();
   const { leads, addLead, updateLead, deleteLead, getLeadsByPartner } = useLeads();
   const { getProductsByPartner, getDocumentsByProduct } = useProducts();
+  const { getPartnerProduct, savePartnerProduct } = usePartnerProducts();
 
   const handleLogout = () => {
     setUserType(null);
@@ -2224,6 +2469,8 @@ export default function App() {
         getDocumentsByProduct={getDocumentsByProduct}
         adminName={adminName}
         getPartnerById={getPartnerById}
+        partnerProduct={getPartnerProduct(currentPartner.id)}
+        onSavePartnerProduct={(productData) => savePartnerProduct(currentPartner.id, productData)}
         onLogout={handleLogout}
         onAddLead={(leadData) => addLead(currentPartner.id, leadData, 'partner', currentPartner.id)}
         onEditLead={(leadId, leadData) => updateLead(currentPartner.id, leadId, leadData)}
