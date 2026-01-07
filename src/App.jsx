@@ -1601,54 +1601,37 @@ const ProductInfoSection = ({ products, getDocumentsByProduct }) => {
 };
 
 // ============================================================================
-// PARTNER PRODUCTS INFO COMPONENT (FOR ADMIN VIEW)
+// PARTNER PRODUCTS INFO COMPONENT (FOR ADMIN VIEW - shows single partner's products)
 // ============================================================================
 
-const PartnerProductsInfoSection = ({ partnerProducts, partners, getPartnerById }) => {
-  const [expandedPartners, setExpandedPartners] = useState({});
+const PartnerProductsSection = ({ products }) => {
+  const [expandedProducts, setExpandedProducts] = useState({});
 
-  const togglePartner = (partnerId) => {
-    setExpandedPartners(prev => ({
+  const toggleProduct = (productId) => {
+    setExpandedProducts(prev => ({
       ...prev,
-      [partnerId]: !prev[partnerId],
+      [productId]: !prev[productId],
     }));
   };
 
-  // Group products by partner
-  const productsByPartner = partnerProducts.reduce((acc, product) => {
-    const partnerId = product.partner_id;
-    if (!acc[partnerId]) acc[partnerId] = [];
-    acc[partnerId].push(product);
-    return acc;
-  }, {});
-
-  const partnersWithProducts = Object.keys(productsByPartner);
-  if (partnersWithProducts.length === 0) return null;
+  if (!products || products.length === 0) return null;
 
   return (
     <div className="mb-6">
-      <h3 className="text-sm font-medium text-gray-500 uppercase mb-3">Partner Products</h3>
+      <h3 className="text-sm font-medium text-gray-500 uppercase mb-3">Partner's Products</h3>
       <div className="space-y-3">
-        {partnersWithProducts.map(partnerId => {
-          const partner = getPartnerById(partnerId);
-          const products = productsByPartner[partnerId];
-          const isExpanded = expandedPartners[partnerId];
+        {products.map(product => {
+          const isExpanded = expandedProducts[product.id];
 
           return (
-            <div key={partnerId} className="bg-white rounded-lg border border-gray-200 overflow-hidden">
+            <div key={product.id} className="bg-white rounded-lg border border-gray-200 overflow-hidden">
               <button
-                onClick={() => togglePartner(partnerId)}
+                onClick={() => toggleProduct(product.id)}
                 className="w-full px-4 py-3 flex items-center justify-between hover:bg-gray-50 transition-colors"
               >
                 <div className="flex items-center gap-3">
-                  <UserCircle className="w-5 h-5 text-green-500" />
-                  <span className="font-medium text-gray-900">
-                    {partner?.name || 'Unknown Partner'}
-                    {partner?.company && <span className="text-gray-500 font-normal"> ({partner.company})</span>}
-                  </span>
-                  <span className="text-xs text-gray-400 bg-gray-100 px-2 py-0.5 rounded">
-                    {products.length} product{products.length !== 1 ? 's' : ''}
-                  </span>
+                  <Package className="w-5 h-5 text-green-500" />
+                  <span className="font-medium text-gray-900">{product.name}</span>
                 </div>
                 {isExpanded ? (
                   <ChevronUp className="w-5 h-5 text-gray-400" />
@@ -1659,26 +1642,30 @@ const PartnerProductsInfoSection = ({ partnerProducts, partners, getPartnerById 
 
               {isExpanded && (
                 <div className="px-4 pb-4 border-t border-gray-100">
-                  <div className="mt-3 space-y-4">
-                    {products.map(product => (
-                      <div key={product.id} className="bg-gray-50 rounded-lg p-3">
-                        <h4 className="font-medium text-gray-900">{product.name}</h4>
-                        {product.description && (
-                          <p className="text-sm text-gray-600 mt-1">{product.description}</p>
-                        )}
-                        {product.url && (
-                          <a
-                            href={product.url}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="text-sm text-blue-600 hover:underline mt-2 inline-block"
-                          >
-                            {product.url}
-                          </a>
-                        )}
-                      </div>
-                    ))}
-                  </div>
+                  {product.description && (
+                    <div className="mt-3">
+                      <h4 className="text-xs font-medium text-gray-500 uppercase mb-1">Description</h4>
+                      <p className="text-sm text-gray-700">{product.description}</p>
+                    </div>
+                  )}
+
+                  {product.url && (
+                    <div className="mt-3">
+                      <h4 className="text-xs font-medium text-gray-500 uppercase mb-1">Product Link</h4>
+                      <a
+                        href={product.url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-sm text-blue-600 hover:underline"
+                      >
+                        {product.url}
+                      </a>
+                    </div>
+                  )}
+
+                  {!product.description && !product.url && (
+                    <p className="mt-3 text-sm text-gray-400">No additional information available.</p>
+                  )}
                 </div>
               )}
             </div>
@@ -2173,7 +2160,7 @@ const AdminView = ({ adminName, adminId, onLogout }) => {
   const { partners, addPartner, updatePartner, deletePartner, getPartnerById } = usePartners();
   const { leads, allLeads, addLead, updateLead, deleteLead, removePartnerLeads, getLeadsByOwnerFilter } = useLeads();
   const { products, productPartners, addProduct, updateProduct, deleteProduct, getDocumentsByProduct, getPartnersByProduct } = useProducts();
-  const { partnerProducts } = usePartnerProducts();
+  const { partnerProducts, getProductsByPartner: getPartnerProductsByPartner } = usePartnerProducts();
 
   const [activeTab, setActiveTab] = useState('partners');
   const [selectedPartnerId, setSelectedPartnerId] = useState(null);
@@ -2296,12 +2283,6 @@ const AdminView = ({ adminName, adminId, onLogout }) => {
         {/* Partners Tab */}
         {activeTab === 'partners' && (
           <div>
-            <PartnerProductsInfoSection
-              partnerProducts={partnerProducts}
-              partners={partners}
-              getPartnerById={getPartnerById}
-            />
-
             <div className="flex justify-between items-center mb-6">
               <h2 className="text-lg font-medium text-gray-900">Referral Partners Directory</h2>
               <Button onClick={() => { setEditingPartner(null); setShowPartnerForm(true); }}>
@@ -2432,6 +2413,8 @@ const AdminView = ({ adminName, adminId, onLogout }) => {
                     Add Lead
                   </Button>
                 </div>
+
+                <PartnerProductsSection products={getPartnerProductsByPartner(selectedPartnerId)} />
 
                 {(leads[selectedPartnerId] || []).length === 0 ? (
                   <EmptyState icon={FileSpreadsheet} title="No leads yet for this partner" description="Add leads to start tracking" />
