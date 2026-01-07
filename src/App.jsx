@@ -37,7 +37,14 @@ const INITIAL_LEAD_FORM = {
   headcount: '',
   status: 'identified',
   notes: '',
+  partner_id: '',
 };
+
+const OWNER_FILTER_OPTIONS = [
+  { value: 'all', label: 'All Leads' },
+  { value: 'superadmin', label: 'Created by me' },
+  { value: 'partner', label: 'Created by partners' },
+];
 
 const INITIAL_PARTNER_FORM = {
   name: '',
@@ -50,6 +57,7 @@ const INITIAL_PRODUCT_FORM = {
   name: '',
   description: '',
   ideal_leads: '',
+  url: '',
 };
 
 // ============================================================================
@@ -158,6 +166,7 @@ const usePartners = () => {
  */
 const useLeads = () => {
   const [leads, setLeads] = useState({});
+  const [allLeads, setAllLeads] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
@@ -172,6 +181,8 @@ const useLeads = () => {
         .order('created_at', { ascending: false });
 
       if (error) throw error;
+
+      setAllLeads(data || []);
 
       const groupedLeads = (data || []).reduce((acc, lead) => {
         const partnerId = lead.partner_id;
@@ -188,11 +199,16 @@ const useLeads = () => {
     }
   };
 
-  const addLead = useCallback(async (partnerId, lead) => {
+  const addLead = useCallback(async (partnerId, lead, ownerType, ownerId) => {
     try {
       const { data, error } = await supabase
         .from('leads')
-        .insert([{ ...lead, partner_id: partnerId }])
+        .insert([{
+          ...lead,
+          partner_id: partnerId,
+          owner_type: ownerType,
+          owner_id: ownerId,
+        }])
         .select()
         .single();
 
@@ -202,6 +218,7 @@ const useLeads = () => {
         ...prev,
         [partnerId]: [data, ...(prev[partnerId] || [])],
       }));
+      setAllLeads(prev => [data, ...prev]);
       return data;
     } catch (error) {
       console.error('Error adding lead:', error);
@@ -225,6 +242,7 @@ const useLeads = () => {
         ...prev,
         [partnerId]: (prev[partnerId] || []).map(l => l.id === leadId ? data : l),
       }));
+      setAllLeads(prev => prev.map(l => l.id === leadId ? data : l));
     } catch (error) {
       console.error('Error updating lead:', error);
       alert('Error updating lead');
@@ -244,6 +262,7 @@ const useLeads = () => {
         ...prev,
         [partnerId]: (prev[partnerId] || []).filter(l => l.id !== leadId),
       }));
+      setAllLeads(prev => prev.filter(l => l.id !== leadId));
     } catch (error) {
       console.error('Error deleting lead:', error);
       alert('Error deleting lead');
@@ -253,6 +272,13 @@ const useLeads = () => {
   const getLeadsByPartner = useCallback((partnerId) => {
     return leads[partnerId] || [];
   }, [leads]);
+
+  const getLeadsByOwnerFilter = useCallback((filter, adminId) => {
+    if (filter === 'all') return allLeads;
+    if (filter === 'superadmin') return allLeads.filter(l => l.owner_type === 'superadmin' && l.owner_id === adminId);
+    if (filter === 'partner') return allLeads.filter(l => l.owner_type === 'partner');
+    return allLeads;
+  }, [allLeads]);
 
   const removePartnerLeads = useCallback(async (partnerId) => {
     try {
@@ -268,6 +294,7 @@ const useLeads = () => {
         delete newLeads[partnerId];
         return newLeads;
       });
+      setAllLeads(prev => prev.filter(l => l.partner_id !== partnerId));
     } catch (error) {
       console.error('Error removing partner leads:', error);
     }
@@ -275,11 +302,13 @@ const useLeads = () => {
 
   return {
     leads,
+    allLeads,
     isLoading,
     addLead,
     updateLead,
     deleteLead,
     getLeadsByPartner,
+    getLeadsByOwnerFilter,
     removePartnerLeads,
     refetch: fetchAllLeads,
   };
@@ -981,6 +1010,71 @@ const LeadForm = ({ lead, onSave, onClose }) => {
   );
 };
 
+const AdminLeadForm = ({ lead, partners, onSave, onClose }) => {
+  const [formData, setFormData] = useState(lead || INITIAL_LEAD_FORM);
+  const [selectedPartnerId, setSelectedPartnerId] = useState(lead?.partner_id || '');
+
+  const handleChange = (field) => (e) => {
+    setFormData(prev => ({ ...prev, [field]: e.target.value }));
+  };
+
+  const handleSubmit = () => {
+    if (!selectedPartnerId) {
+      alert('Please select a partner for this lead');
+      return;
+    }
+    if (!formData.name.trim() || !formData.email.trim() || !formData.company.trim()) {
+      alert('Name, Email, and Company are required');
+      return;
+    }
+    onSave({
+      name: formData.name.trim(),
+      email: formData.email.trim(),
+      phone: formData.phone?.trim() || '',
+      company: formData.company.trim(),
+      title: formData.title?.trim() || '',
+      company_url: formData.company_url?.trim() || '',
+      industry: formData.industry?.trim() || '',
+      headcount: formData.headcount?.trim() || '',
+      status: formData.status,
+      notes: formData.notes?.trim() || '',
+    }, selectedPartnerId);
+  };
+
+  const partnerOptions = [
+    { value: '', label: 'Select a partner...' },
+    ...partners.map(p => ({ value: p.id, label: `${p.name} (${p.company || p.email})` })),
+  ];
+
+  return (
+    <Modal isOpen onClose={onClose} title={lead ? 'Edit Lead' : 'Create Lead for Partner'}>
+      <div className="space-y-4">
+        <Select
+          label="Assign to Partner"
+          required
+          value={selectedPartnerId}
+          onChange={(e) => setSelectedPartnerId(e.target.value)}
+          options={partnerOptions}
+        />
+        <Input label="Name" required value={formData.name} onChange={handleChange('name')} placeholder="Contact name" />
+        <Input label="Email" required type="email" value={formData.email} onChange={handleChange('email')} placeholder="contact@company.com" />
+        <Input label="Phone" type="tel" value={formData.phone || ''} onChange={handleChange('phone')} placeholder="(555) 123-4567" />
+        <Input label="Company" required value={formData.company} onChange={handleChange('company')} placeholder="Company name" />
+        <Input label="Title" value={formData.title || ''} onChange={handleChange('title')} placeholder="Job title" />
+        <Input label="Company URL" type="url" value={formData.company_url || ''} onChange={handleChange('company_url')} placeholder="https://company.com" />
+        <Input label="Industry" value={formData.industry || ''} onChange={handleChange('industry')} placeholder="e.g. Technology, Healthcare" />
+        <Input label="Headcount" value={formData.headcount || ''} onChange={handleChange('headcount')} placeholder="e.g. 50, 100-500" />
+        <Select label="Status" required value={formData.status} onChange={handleChange('status')} options={STATUS_OPTIONS} />
+        <TextArea label="Notes" value={formData.notes || ''} onChange={handleChange('notes')} rows={3} placeholder="Additional notes..." />
+        <div className="flex gap-3 pt-2">
+          <Button variant="secondary" onClick={onClose} className="flex-1">Cancel</Button>
+          <Button onClick={handleSubmit} className="flex-1"><Save className="w-4 h-4" />Save</Button>
+        </div>
+      </div>
+    </Modal>
+  );
+};
+
 const ProductForm = ({ product, partners, existingPartnerIds, existingDocuments, onSave, onClose }) => {
   const [formData, setFormData] = useState(product || INITIAL_PRODUCT_FORM);
   const [selectedPartners, setSelectedPartners] = useState(existingPartnerIds || []);
@@ -1024,6 +1118,7 @@ const ProductForm = ({ product, partners, existingPartnerIds, existingDocuments,
           name: formData.name.trim(),
           description: formData.description?.trim() || '',
           ideal_leads: formData.ideal_leads?.trim() || '',
+          url: formData.url?.trim() || '',
         },
         selectedPartners,
         files,
@@ -1064,6 +1159,13 @@ const ProductForm = ({ product, partners, existingPartnerIds, existingDocuments,
           onChange={handleChange('ideal_leads')}
           rows={3}
           placeholder="Describe ideal lead characteristics..."
+        />
+        <Input
+          label="Product URL"
+          type="url"
+          value={formData.url || ''}
+          onChange={handleChange('url')}
+          placeholder="https://example.com/product-info"
         />
 
         <MultiSelect
@@ -1175,14 +1277,18 @@ const PartnersTable = ({ partners, leads, onEdit, onDelete }) => (
   </div>
 );
 
-const LeadsTable = ({ leads, onEdit, onDelete }) => (
+const LeadsTable = ({ leads, onEdit, onDelete, getOwnerName, showPartnerColumn = false, getPartnerName }) => (
   <div className="bg-white rounded-lg border border-gray-200 overflow-x-auto">
-    <table className="w-full min-w-[900px]">
+    <table className="w-full min-w-[1000px]">
       <thead className="bg-gray-50 border-b border-gray-200">
         <tr>
+          <th className="text-left px-4 py-3 text-xs font-medium text-gray-500 uppercase">Owner</th>
           <th className="text-left px-4 py-3 text-xs font-medium text-gray-500 uppercase">Name</th>
           <th className="text-left px-4 py-3 text-xs font-medium text-gray-500 uppercase">Email</th>
           <th className="text-left px-4 py-3 text-xs font-medium text-gray-500 uppercase">Company</th>
+          {showPartnerColumn && (
+            <th className="text-left px-4 py-3 text-xs font-medium text-gray-500 uppercase">Partner</th>
+          )}
           <th className="text-left px-4 py-3 text-xs font-medium text-gray-500 uppercase">Title</th>
           <th className="text-left px-4 py-3 text-xs font-medium text-gray-500 uppercase">Industry</th>
           <th className="text-left px-4 py-3 text-xs font-medium text-gray-500 uppercase">Headcount</th>
@@ -1194,6 +1300,9 @@ const LeadsTable = ({ leads, onEdit, onDelete }) => (
       <tbody className="divide-y divide-gray-200">
         {leads.map(lead => (
           <tr key={lead.id} className="hover:bg-gray-50">
+            <td className="px-4 py-4 text-sm text-gray-600 font-medium">
+              {getOwnerName ? getOwnerName(lead) : '-'}
+            </td>
             <td className="px-4 py-4 text-sm text-gray-900">{lead.name}</td>
             <td className="px-4 py-4 text-sm text-gray-500">{lead.email}</td>
             <td className="px-4 py-4 text-sm text-gray-500">
@@ -1203,6 +1312,11 @@ const LeadsTable = ({ leads, onEdit, onDelete }) => (
                 </a>
               ) : lead.company}
             </td>
+            {showPartnerColumn && (
+              <td className="px-4 py-4 text-sm text-gray-500">
+                {getPartnerName ? getPartnerName(lead.partner_id) : '-'}
+              </td>
+            )}
             <td className="px-4 py-4 text-sm text-gray-500">{lead.title || '-'}</td>
             <td className="px-4 py-4 text-sm text-gray-500">{lead.industry || '-'}</td>
             <td className="px-4 py-4 text-sm text-gray-500">{lead.headcount || '-'}</td>
@@ -1226,12 +1340,13 @@ const LeadsTable = ({ leads, onEdit, onDelete }) => (
 );
 
 const ProductsTable = ({ products, productPartners, partners, onEdit, onDelete }) => (
-  <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
+  <div className="bg-white rounded-lg border border-gray-200 overflow-hidden overflow-x-auto">
     <table className="w-full">
       <thead className="bg-gray-50 border-b border-gray-200">
         <tr>
           <th className="text-left px-6 py-3 text-xs font-medium text-gray-500 uppercase">Name</th>
           <th className="text-left px-6 py-3 text-xs font-medium text-gray-500 uppercase">Description</th>
+          <th className="text-left px-6 py-3 text-xs font-medium text-gray-500 uppercase">URL</th>
           <th className="text-left px-6 py-3 text-xs font-medium text-gray-500 uppercase">Partners</th>
           <th className="text-left px-6 py-3 text-xs font-medium text-gray-500 uppercase">Created</th>
           <th className="text-right px-6 py-3 text-xs font-medium text-gray-500 uppercase">Actions</th>
@@ -1248,6 +1363,13 @@ const ProductsTable = ({ products, productPartners, partners, onEdit, onDelete }
             <tr key={product.id} className="hover:bg-gray-50">
               <td className="px-6 py-4 text-sm text-gray-900 font-medium">{product.name}</td>
               <td className="px-6 py-4 text-sm text-gray-500 max-w-xs truncate">{product.description || '-'}</td>
+              <td className="px-6 py-4 text-sm text-gray-500 max-w-[200px] truncate">
+                {product.url ? (
+                  <a href={product.url} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline">
+                    {product.url}
+                  </a>
+                ) : '-'}
+              </td>
               <td className="px-6 py-4 text-sm text-gray-500">
                 {partnerNames.length > 0 ? (
                   <span title={partnerNames.join(', ')}>
@@ -1328,6 +1450,20 @@ const ProductInfoSection = ({ products, getDocumentsByProduct }) => {
                     <div className="mt-3">
                       <h4 className="text-xs font-medium text-gray-500 uppercase mb-1">Ideal Leads</h4>
                       <p className="text-sm text-gray-700">{product.ideal_leads}</p>
+                    </div>
+                  )}
+
+                  {product.url && (
+                    <div className="mt-3">
+                      <h4 className="text-xs font-medium text-gray-500 uppercase mb-1">Product Link</h4>
+                      <a
+                        href={product.url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-sm text-blue-600 hover:underline"
+                      >
+                        {product.url}
+                      </a>
                     </div>
                   )}
 
@@ -1492,7 +1628,7 @@ const LoginScreen = ({ onSuperadminLogin, onPartnerLogin, hasPartners }) => {
 
   const handleAdminLogin = (password) => {
     if (validateLogin(password)) {
-      onSuperadminLogin(adminData.name);
+      onSuperadminLogin(adminData.name, adminData.id);
     } else {
       alert('Invalid password');
     }
@@ -1622,7 +1758,7 @@ const LoginScreen = ({ onSuperadminLogin, onPartnerLogin, hasPartners }) => {
 // VIEW COMPONENTS
 // ============================================================================
 
-const PartnerView = ({ partner, leads, products, getDocumentsByProduct, onLogout, onAddLead, onEditLead, onDeleteLead }) => {
+const PartnerView = ({ partner, leads, products, getDocumentsByProduct, adminName, getPartnerById, onLogout, onAddLead, onEditLead, onDeleteLead }) => {
   const [showLeadForm, setShowLeadForm] = useState(false);
   const [editingLead, setEditingLead] = useState(null);
 
@@ -1647,6 +1783,19 @@ const PartnerView = ({ partner, leads, products, getDocumentsByProduct, onLogout
     }
   };
 
+  // Helper to get owner name
+  const getOwnerName = (lead) => {
+    if (lead.owner_type === 'superadmin') {
+      return adminName || 'Admin';
+    }
+    // If owner is a partner, get their name
+    if (getPartnerById) {
+      const ownerPartner = getPartnerById(lead.owner_id);
+      return ownerPartner?.name || partner.name;
+    }
+    return partner.name;
+  };
+
   return (
     <div className="min-h-screen bg-gray-50">
       <Header title="My Leads" subtitle={`Welcome, ${partner.name}`} onLogout={onLogout} />
@@ -1667,7 +1816,7 @@ const PartnerView = ({ partner, leads, products, getDocumentsByProduct, onLogout
         {leads.length === 0 ? (
           <EmptyState icon={FileSpreadsheet} title="No leads yet" description="Add your first lead to get started" />
         ) : (
-          <LeadsTable leads={leads} onEdit={handleEditLead} onDelete={handleDeleteLead} />
+          <LeadsTable leads={leads} onEdit={handleEditLead} onDelete={handleDeleteLead} getOwnerName={getOwnerName} />
         )}
       </main>
 
@@ -1682,15 +1831,18 @@ const PartnerView = ({ partner, leads, products, getDocumentsByProduct, onLogout
   );
 };
 
-const AdminView = ({ adminName, onLogout }) => {
+const AdminView = ({ adminName, adminId, onLogout }) => {
   const { partners, addPartner, updatePartner, deletePartner, getPartnerById } = usePartners();
-  const { leads, addLead, updateLead, deleteLead, removePartnerLeads } = useLeads();
+  const { leads, allLeads, addLead, updateLead, deleteLead, removePartnerLeads, getLeadsByOwnerFilter } = useLeads();
   const { products, productPartners, addProduct, updateProduct, deleteProduct, getDocumentsByProduct, getPartnersByProduct } = useProducts();
 
   const [activeTab, setActiveTab] = useState('partners');
   const [selectedPartnerId, setSelectedPartnerId] = useState(null);
+  const [leadsViewMode, setLeadsViewMode] = useState('all'); // 'all' or 'byPartner'
+  const [ownerFilter, setOwnerFilter] = useState('all');
   const [showPartnerForm, setShowPartnerForm] = useState(false);
   const [showLeadForm, setShowLeadForm] = useState(false);
+  const [showAdminLeadForm, setShowAdminLeadForm] = useState(false);
   const [showProductForm, setShowProductForm] = useState(false);
   const [editingPartner, setEditingPartner] = useState(null);
   const [editingLead, setEditingLead] = useState(null);
@@ -1703,6 +1855,24 @@ const AdminView = ({ adminName, onLogout }) => {
   ];
 
   const selectedPartner = getPartnerById(selectedPartnerId);
+
+  // Helper to get owner name for a lead
+  const getOwnerName = useCallback((lead) => {
+    if (lead.owner_type === 'superadmin') {
+      return adminName;
+    }
+    const partner = getPartnerById(lead.owner_id);
+    return partner?.name || 'Unknown';
+  }, [adminName, getPartnerById]);
+
+  // Helper to get partner name by ID
+  const getPartnerName = useCallback((partnerId) => {
+    const partner = getPartnerById(partnerId);
+    return partner?.name || 'Unknown';
+  }, [getPartnerById]);
+
+  // Get filtered leads for "All Leads" view
+  const filteredLeads = getLeadsByOwnerFilter(ownerFilter, adminId);
 
   const handleAddPartner = async (partnerData) => {
     await addPartner(partnerData);
@@ -1727,9 +1897,17 @@ const AdminView = ({ adminName, onLogout }) => {
     if (editingLead) {
       await updateLead(selectedPartnerId, editingLead.id, leadData);
     } else {
-      await addLead(selectedPartnerId, leadData);
+      // Admin creating lead for specific partner (from partner view)
+      await addLead(selectedPartnerId, leadData, 'superadmin', adminId);
     }
     setShowLeadForm(false);
+    setEditingLead(null);
+  };
+
+  // Handle admin creating lead with partner selection
+  const handleAdminSaveLead = async (leadData, partnerId) => {
+    await addLead(partnerId, leadData, 'superadmin', adminId);
+    setShowAdminLeadForm(false);
     setEditingLead(null);
   };
 
@@ -1737,6 +1915,21 @@ const AdminView = ({ adminName, onLogout }) => {
     if (confirm('Delete this lead?')) {
       await deleteLead(selectedPartnerId, leadId);
     }
+  };
+
+  // Delete lead from all leads view
+  const handleDeleteLeadFromAll = async (lead) => {
+    if (confirm('Delete this lead?')) {
+      await deleteLead(lead.partner_id, lead.id);
+    }
+  };
+
+  // Edit lead from all leads view
+  const handleEditLeadFromAll = (lead) => {
+    setSelectedPartnerId(lead.partner_id);
+    setEditingLead(lead);
+    setShowLeadForm(true);
+    setLeadsViewMode('byPartner');
   };
 
   const handleSaveProduct = async (productData, partnerIds, files, removedDocIds) => {
@@ -1785,58 +1978,127 @@ const AdminView = ({ adminName, onLogout }) => {
           </div>
         )}
 
-        {/* Leads Tab - Partner Selection */}
-        {activeTab === 'leads' && !selectedPartnerId && (
+        {/* Leads Tab */}
+        {activeTab === 'leads' && (
           <div>
-            <h2 className="text-lg font-medium text-gray-900 mb-6">Select a Referral Partner</h2>
-            {partners.length === 0 ? (
-              <EmptyState icon={FileSpreadsheet} title="No referral partners yet" description="Add partners in the Referral Partners tab first" />
-            ) : (
-              <div className="grid gap-4">
-                {partners.map(partner => (
-                  <button
-                    key={partner.id}
-                    onClick={() => setSelectedPartnerId(partner.id)}
-                    className="bg-white rounded-lg border border-gray-200 p-4 text-left hover:border-blue-300 hover:shadow-sm transition-all flex justify-between items-center"
-                  >
-                    <div>
-                      <h3 className="font-medium text-gray-900">{partner.name}</h3>
-                      <p className="text-sm text-gray-500">{partner.company || partner.email}</p>
-                      <p className="text-xs text-gray-400 mt-1">{(leads[partner.id] || []).length} leads</p>
-                    </div>
-                    <ChevronRight className="w-5 h-5 text-gray-400" />
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
-        )}
-
-        {/* Leads Tab - Partner Leads */}
-        {activeTab === 'leads' && selectedPartnerId && selectedPartner && (
-          <div>
+            {/* View Mode Toggle */}
             <div className="flex items-center gap-4 mb-6">
-              <Button variant="ghost" onClick={() => setSelectedPartnerId(null)}>
-                <ArrowLeft className="w-5 h-5" />
-              </Button>
-              <div className="flex-1">
-                <h2 className="text-lg font-medium text-gray-900">{selectedPartner.name}'s Leads</h2>
-                <p className="text-sm text-gray-500">{selectedPartner.company || selectedPartner.email}</p>
+              <div className="flex bg-gray-100 rounded-lg p-1">
+                <button
+                  onClick={() => { setLeadsViewMode('all'); setSelectedPartnerId(null); }}
+                  className={`px-4 py-2 text-sm font-medium rounded-md transition-colors ${
+                    leadsViewMode === 'all' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'
+                  }`}
+                >
+                  All Leads
+                </button>
+                <button
+                  onClick={() => setLeadsViewMode('byPartner')}
+                  className={`px-4 py-2 text-sm font-medium rounded-md transition-colors ${
+                    leadsViewMode === 'byPartner' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'
+                  }`}
+                >
+                  By Partner
+                </button>
               </div>
-              <Button onClick={() => { setEditingLead(null); setShowLeadForm(true); }}>
-                <Plus className="w-4 h-4" />
-                Add Lead
-              </Button>
             </div>
 
-            {(leads[selectedPartnerId] || []).length === 0 ? (
-              <EmptyState icon={FileSpreadsheet} title="No leads yet for this partner" description="Add leads to start tracking" />
-            ) : (
-              <LeadsTable
-                leads={leads[selectedPartnerId] || []}
-                onEdit={(lead) => { setEditingLead(lead); setShowLeadForm(true); }}
-                onDelete={handleDeleteLead}
-              />
+            {/* All Leads View */}
+            {leadsViewMode === 'all' && (
+              <div>
+                <div className="flex justify-between items-center mb-6">
+                  <div className="flex items-center gap-4">
+                    <h2 className="text-lg font-medium text-gray-900">All Leads</h2>
+                    <select
+                      value={ownerFilter}
+                      onChange={(e) => setOwnerFilter(e.target.value)}
+                      className="border border-gray-300 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    >
+                      {OWNER_FILTER_OPTIONS.map(opt => (
+                        <option key={opt.value} value={opt.value}>{opt.label}</option>
+                      ))}
+                    </select>
+                    <span className="text-sm text-gray-500">{filteredLeads.length} leads</span>
+                  </div>
+                  <Button onClick={() => { setEditingLead(null); setShowAdminLeadForm(true); }}>
+                    <Plus className="w-4 h-4" />
+                    Create Lead
+                  </Button>
+                </div>
+
+                {filteredLeads.length === 0 ? (
+                  <EmptyState icon={FileSpreadsheet} title="No leads found" description="Create a lead or adjust your filter" />
+                ) : (
+                  <LeadsTable
+                    leads={filteredLeads}
+                    onEdit={handleEditLeadFromAll}
+                    onDelete={(leadId) => {
+                      const lead = filteredLeads.find(l => l.id === leadId);
+                      if (lead) handleDeleteLeadFromAll(lead);
+                    }}
+                    getOwnerName={getOwnerName}
+                    showPartnerColumn={true}
+                    getPartnerName={getPartnerName}
+                  />
+                )}
+              </div>
+            )}
+
+            {/* By Partner View - Partner Selection */}
+            {leadsViewMode === 'byPartner' && !selectedPartnerId && (
+              <div>
+                <h2 className="text-lg font-medium text-gray-900 mb-6">Select a Referral Partner</h2>
+                {partners.length === 0 ? (
+                  <EmptyState icon={FileSpreadsheet} title="No referral partners yet" description="Add partners in the Referral Partners tab first" />
+                ) : (
+                  <div className="grid gap-4">
+                    {partners.map(partner => (
+                      <button
+                        key={partner.id}
+                        onClick={() => setSelectedPartnerId(partner.id)}
+                        className="bg-white rounded-lg border border-gray-200 p-4 text-left hover:border-blue-300 hover:shadow-sm transition-all flex justify-between items-center"
+                      >
+                        <div>
+                          <h3 className="font-medium text-gray-900">{partner.name}</h3>
+                          <p className="text-sm text-gray-500">{partner.company || partner.email}</p>
+                          <p className="text-xs text-gray-400 mt-1">{(leads[partner.id] || []).length} leads</p>
+                        </div>
+                        <ChevronRight className="w-5 h-5 text-gray-400" />
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* By Partner View - Partner Leads */}
+            {leadsViewMode === 'byPartner' && selectedPartnerId && selectedPartner && (
+              <div>
+                <div className="flex items-center gap-4 mb-6">
+                  <Button variant="ghost" onClick={() => setSelectedPartnerId(null)}>
+                    <ArrowLeft className="w-5 h-5" />
+                  </Button>
+                  <div className="flex-1">
+                    <h2 className="text-lg font-medium text-gray-900">{selectedPartner.name}'s Leads</h2>
+                    <p className="text-sm text-gray-500">{selectedPartner.company || selectedPartner.email}</p>
+                  </div>
+                  <Button onClick={() => { setEditingLead(null); setShowLeadForm(true); }}>
+                    <Plus className="w-4 h-4" />
+                    Add Lead
+                  </Button>
+                </div>
+
+                {(leads[selectedPartnerId] || []).length === 0 ? (
+                  <EmptyState icon={FileSpreadsheet} title="No leads yet for this partner" description="Add leads to start tracking" />
+                ) : (
+                  <LeadsTable
+                    leads={leads[selectedPartnerId] || []}
+                    onEdit={(lead) => { setEditingLead(lead); setShowLeadForm(true); }}
+                    onDelete={handleDeleteLead}
+                    getOwnerName={getOwnerName}
+                  />
+                )}
+              </div>
             )}
           </div>
         )}
@@ -1883,6 +2145,15 @@ const AdminView = ({ adminName, onLogout }) => {
         />
       )}
 
+      {showAdminLeadForm && (
+        <AdminLeadForm
+          lead={null}
+          partners={partners}
+          onSave={handleAdminSaveLead}
+          onClose={() => { setShowAdminLeadForm(false); setEditingLead(null); }}
+        />
+      )}
+
       {showProductForm && (
         <ProductForm
           product={editingProduct}
@@ -1905,8 +2176,9 @@ export default function App() {
   const [userType, setUserType] = useState(null);
   const [currentPartner, setCurrentPartner] = useState(null);
   const [adminName, setAdminName] = useState('Super Admin');
+  const [adminId, setAdminId] = useState(null);
 
-  const { partners, getPartnerByEmail } = usePartners();
+  const { partners, getPartnerByEmail, getPartnerById } = usePartners();
   const { leads, addLead, updateLead, deleteLead, getLeadsByPartner } = useLeads();
   const { getProductsByPartner, getDocumentsByProduct } = useProducts();
 
@@ -1925,8 +2197,9 @@ export default function App() {
     }
   };
 
-  const handleSuperadminLogin = (name) => {
+  const handleSuperadminLogin = (name, id) => {
     setAdminName(name);
+    setAdminId(id);
     setUserType('superadmin');
   };
 
@@ -1949,8 +2222,10 @@ export default function App() {
         leads={getLeadsByPartner(currentPartner.id)}
         products={getProductsByPartner(currentPartner.id)}
         getDocumentsByProduct={getDocumentsByProduct}
+        adminName={adminName}
+        getPartnerById={getPartnerById}
         onLogout={handleLogout}
-        onAddLead={(leadData) => addLead(currentPartner.id, leadData)}
+        onAddLead={(leadData) => addLead(currentPartner.id, leadData, 'partner', currentPartner.id)}
         onEditLead={(leadId, leadData) => updateLead(currentPartner.id, leadId, leadData)}
         onDeleteLead={(leadId) => deleteLead(currentPartner.id, leadId)}
       />
@@ -1959,7 +2234,7 @@ export default function App() {
 
   // Admin View
   if (userType === 'superadmin') {
-    return <AdminView adminName={adminName} onLogout={handleLogout} />;
+    return <AdminView adminName={adminName} adminId={adminId} onLogout={handleLogout} />;
   }
 
   return null;
