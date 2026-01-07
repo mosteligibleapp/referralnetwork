@@ -1511,7 +1511,7 @@ const ProductInfoSection = ({ products, getDocumentsByProduct }) => {
 
   return (
     <div className="mb-6">
-      <h3 className="text-sm font-medium text-gray-500 uppercase mb-3">Your Products</h3>
+      <h3 className="text-sm font-medium text-gray-500 uppercase mb-3">Products</h3>
       <div className="space-y-3">
         {products.map(product => {
           const isExpanded = expandedProducts[product.id];
