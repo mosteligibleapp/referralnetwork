@@ -2,7 +2,8 @@ import React, { useState, useEffect, useCallback, createContext, useContext } fr
 import {
   Plus, Edit2, Trash2, Users, FileSpreadsheet,
   ArrowLeft, Save, X, ChevronRight, LogOut, Shield, UserCircle,
-  Package, Download, Upload, ChevronDown, ChevronUp, FileText
+  Package, Download, Upload, ChevronDown, ChevronUp, FileText,
+  LayoutDashboard, Target, DollarSign, CheckCircle2, Circle, Sparkles
 } from 'lucide-react';
 import { supabase } from './lib/supabase';
 
@@ -65,6 +66,22 @@ const INITIAL_PARTNER_PRODUCT_FORM = {
   description: '',
   url: '',
 };
+
+// Partner program tasks for success
+const PARTNER_TASKS = [
+  { id: 'review_icp', label: 'Review our Ideal Customer Profile (ICP)', description: 'Understand who we\'re looking for' },
+  { id: 'review_products', label: 'Review available products and materials', description: 'Familiarize yourself with what we offer' },
+  { id: 'first_lead', label: 'Submit your first lead', description: 'Add a qualified lead to get started' },
+  { id: 'schedule_intro', label: 'Schedule an introduction call', description: 'Connect your lead with our team' },
+  { id: 'submit_product', label: 'Submit your product for cross-referrals', description: 'Let us send leads your way too' },
+];
+
+// Commission structure
+const COMMISSION_TIERS = [
+  { tier: 'Standard Referral', rate: '10%', description: 'For qualified introductions that close' },
+  { tier: 'Premium Partner', rate: '15%', description: 'After 5+ successful deals closed' },
+  { tier: 'Strategic Partner', rate: '20%', description: 'High-volume partners with 10+ deals' },
+];
 
 // ============================================================================
 // CUSTOM HOOKS - SUPABASE
@@ -408,6 +425,46 @@ const usePartnerProducts = () => {
     savePartnerProduct,
     deletePartnerProduct,
     refetch: fetchPartnerProducts,
+  };
+};
+
+/**
+ * Hook for managing partner tasks with localStorage persistence
+ */
+const usePartnerTasks = (partnerId) => {
+  const storageKey = `partner_tasks_${partnerId}`;
+  const [completedTasks, setCompletedTasks] = useState(() => {
+    if (typeof window !== 'undefined') {
+      const stored = localStorage.getItem(storageKey);
+      return stored ? JSON.parse(stored) : [];
+    }
+    return [];
+  });
+
+  useEffect(() => {
+    localStorage.setItem(storageKey, JSON.stringify(completedTasks));
+  }, [completedTasks, storageKey]);
+
+  const toggleTask = useCallback((taskId) => {
+    setCompletedTasks(prev => {
+      if (prev.includes(taskId)) {
+        return prev.filter(id => id !== taskId);
+      }
+      return [...prev, taskId];
+    });
+  }, []);
+
+  const isTaskCompleted = useCallback((taskId) => {
+    return completedTasks.includes(taskId);
+  }, [completedTasks]);
+
+  const completionPercentage = Math.round((completedTasks.length / PARTNER_TASKS.length) * 100);
+
+  return {
+    completedTasks,
+    toggleTask,
+    isTaskCompleted,
+    completionPercentage,
   };
 };
 
@@ -1856,11 +1913,12 @@ const LoginScreen = ({ onSuperadminLogin, onPartnerLogin, hasPartners }) => {
 // ============================================================================
 
 const PartnerView = ({ partner, leads, products, getDocumentsByProduct, adminName, getPartnerById, partnerProduct, onSavePartnerProduct, onLogout, onAddLead, onEditLead, onDeleteLead }) => {
-  const [activeTab, setActiveTab] = useState('leads');
+  const [activeTab, setActiveTab] = useState('dashboard');
   const [showLeadForm, setShowLeadForm] = useState(false);
   const [editingLead, setEditingLead] = useState(null);
   const [productForm, setProductForm] = useState(partnerProduct || INITIAL_PARTNER_PRODUCT_FORM);
   const [isSavingProduct, setIsSavingProduct] = useState(false);
+  const { toggleTask, isTaskCompleted, completionPercentage } = usePartnerTasks(partner.id);
 
   // Update product form when partnerProduct changes
   useEffect(() => {
@@ -1925,6 +1983,7 @@ const PartnerView = ({ partner, leads, products, getDocumentsByProduct, adminNam
   };
 
   const tabs = [
+    { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
     { id: 'leads', label: 'My Leads', icon: FileSpreadsheet },
     { id: 'myProduct', label: 'My Product', icon: Package },
   ];
@@ -1935,6 +1994,190 @@ const PartnerView = ({ partner, leads, products, getDocumentsByProduct, adminNam
       <TabNav tabs={tabs} activeTab={activeTab} onTabChange={setActiveTab} />
 
       <main className="p-6">
+        {/* Dashboard Tab */}
+        {activeTab === 'dashboard' && (
+          <div className="space-y-6">
+            {/* Welcome Banner */}
+            <div className="bg-gradient-to-r from-blue-600 to-blue-700 rounded-lg p-6 text-white">
+              <div className="flex items-start justify-between">
+                <div>
+                  <h2 className="text-xl font-semibold mb-2">Welcome to the Partner Program</h2>
+                  <p className="text-blue-100">
+                    We're excited to have you as a referral partner. This dashboard will help you get started and track your progress.
+                  </p>
+                </div>
+                <Sparkles className="w-8 h-8 text-blue-200" />
+              </div>
+              {completionPercentage > 0 && (
+                <div className="mt-4">
+                  <div className="flex items-center justify-between text-sm mb-1">
+                    <span>Onboarding Progress</span>
+                    <span>{completionPercentage}% complete</span>
+                  </div>
+                  <div className="w-full bg-blue-500 rounded-full h-2">
+                    <div
+                      className="bg-white rounded-full h-2 transition-all duration-300"
+                      style={{ width: `${completionPercentage}%` }}
+                    />
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+              {/* ICP Section */}
+              <div className="bg-white rounded-lg border border-gray-200 p-6">
+                <div className="flex items-center gap-3 mb-4">
+                  <div className="p-2 bg-purple-100 rounded-lg">
+                    <Target className="w-5 h-5 text-purple-600" />
+                  </div>
+                  <h3 className="text-lg font-semibold text-gray-900">Ideal Customer Profile (ICP)</h3>
+                </div>
+                <p className="text-sm text-gray-500 mb-4">
+                  These are the types of leads we're looking for. The more closely your referrals match this profile, the higher the likelihood of success.
+                </p>
+
+                {products.length > 0 ? (
+                  <div className="space-y-4">
+                    {products.map(product => (
+                      <div key={product.id} className="border-l-4 border-purple-500 pl-4 py-2">
+                        <h4 className="font-medium text-gray-900">{product.name}</h4>
+                        {product.ideal_leads ? (
+                          <p className="text-sm text-gray-600 mt-1">{product.ideal_leads}</p>
+                        ) : (
+                          <p className="text-sm text-gray-400 mt-1 italic">No specific criteria defined</p>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="text-center py-6 text-gray-400">
+                    <Target className="w-10 h-10 mx-auto mb-2 opacity-50" />
+                    <p>No products assigned yet</p>
+                  </div>
+                )}
+
+                <div className="mt-4 p-3 bg-purple-50 rounded-lg">
+                  <h4 className="text-sm font-medium text-purple-800 mb-2">Quick Tips for Quality Referrals</h4>
+                  <ul className="text-sm text-purple-700 space-y-1">
+                    <li>• Decision-makers or budget holders preferred</li>
+                    <li>• Companies actively seeking solutions</li>
+                    <li>• Warm introductions convert best</li>
+                  </ul>
+                </div>
+              </div>
+
+              {/* Commission Section */}
+              <div className="bg-white rounded-lg border border-gray-200 p-6">
+                <div className="flex items-center gap-3 mb-4">
+                  <div className="p-2 bg-green-100 rounded-lg">
+                    <DollarSign className="w-5 h-5 text-green-600" />
+                  </div>
+                  <h3 className="text-lg font-semibold text-gray-900">Commission Structure</h3>
+                </div>
+                <p className="text-sm text-gray-500 mb-4">
+                  Earn commissions on successful introductions. The more deals you help close, the higher your rate.
+                </p>
+
+                <div className="space-y-3">
+                  {COMMISSION_TIERS.map((tier, index) => (
+                    <div
+                      key={tier.tier}
+                      className={`p-4 rounded-lg border-2 ${
+                        index === 0
+                          ? 'border-green-200 bg-green-50'
+                          : 'border-gray-100 bg-gray-50'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between mb-1">
+                        <span className="font-medium text-gray-900">{tier.tier}</span>
+                        <span className={`text-lg font-bold ${
+                          index === 0 ? 'text-green-600' : 'text-gray-600'
+                        }`}>
+                          {tier.rate}
+                        </span>
+                      </div>
+                      <p className="text-sm text-gray-500">{tier.description}</p>
+                    </div>
+                  ))}
+                </div>
+
+                <div className="mt-4 p-3 bg-green-50 rounded-lg">
+                  <h4 className="text-sm font-medium text-green-800 mb-1">Payment Terms</h4>
+                  <p className="text-sm text-green-700">
+                    Commissions are paid within 30 days of deal closure. You'll receive an email notification when payments are processed.
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            {/* Tasks Section */}
+            <div className="bg-white rounded-lg border border-gray-200 p-6">
+              <div className="flex items-center gap-3 mb-4">
+                <div className="p-2 bg-blue-100 rounded-lg">
+                  <CheckCircle2 className="w-5 h-5 text-blue-600" />
+                </div>
+                <div>
+                  <h3 className="text-lg font-semibold text-gray-900">Getting Started Checklist</h3>
+                  <p className="text-sm text-gray-500">Complete these tasks to maximize your success in the program</p>
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                {PARTNER_TASKS.map((task) => {
+                  const completed = isTaskCompleted(task.id);
+                  return (
+                    <button
+                      key={task.id}
+                      onClick={() => toggleTask(task.id)}
+                      className={`w-full flex items-start gap-3 p-4 rounded-lg border-2 transition-all text-left ${
+                        completed
+                          ? 'border-green-200 bg-green-50'
+                          : 'border-gray-100 bg-gray-50 hover:border-gray-200 hover:bg-gray-100'
+                      }`}
+                    >
+                      {completed ? (
+                        <CheckCircle2 className="w-5 h-5 text-green-500 flex-shrink-0 mt-0.5" />
+                      ) : (
+                        <Circle className="w-5 h-5 text-gray-300 flex-shrink-0 mt-0.5" />
+                      )}
+                      <div>
+                        <span className={`font-medium ${completed ? 'text-green-700 line-through' : 'text-gray-900'}`}>
+                          {task.label}
+                        </span>
+                        <p className={`text-sm mt-0.5 ${completed ? 'text-green-600' : 'text-gray-500'}`}>
+                          {task.description}
+                        </p>
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+
+              {completionPercentage === 100 && (
+                <div className="mt-4 p-4 bg-green-100 rounded-lg border border-green-200">
+                  <div className="flex items-center gap-2">
+                    <Sparkles className="w-5 h-5 text-green-600" />
+                    <span className="font-medium text-green-800">You're all set! Start referring leads to earn commissions.</span>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Quick Actions */}
+            <div className="flex flex-wrap gap-3">
+              <Button onClick={() => setActiveTab('leads')}>
+                <Plus className="w-4 h-4" />
+                Submit a Lead
+              </Button>
+              <Button variant="secondary" onClick={() => setActiveTab('myProduct')}>
+                <Package className="w-4 h-4" />
+                Submit Your Product
+              </Button>
+            </div>
+          </div>
+        )}
+
         {/* Leads Tab */}
         {activeTab === 'leads' && (
           <>
