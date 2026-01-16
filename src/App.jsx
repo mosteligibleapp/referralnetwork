@@ -12,17 +12,15 @@ import { supabase } from './lib/supabase';
 
 const STATUS_OPTIONS = [
   { value: 'identified', label: 'Identified' },
-  { value: 'qualified', label: 'Qualified' },
   { value: 'introduced', label: 'Introduced' },
-  { value: 'won', label: 'Won' },
-  { value: 'lost', label: 'Lost' },
+  { value: 'won', label: 'Closed Won' },
+  { value: 'lost', label: 'Closed Lost' },
 ];
 
 const STATUS_COLORS = {
-  identified: 'bg-yellow-100 text-yellow-700',
-  qualified: 'bg-blue-100 text-blue-700',
-  introduced: 'bg-purple-100 text-purple-700',
-  won: 'bg-green-100 text-green-700',
+  identified: 'bg-gray-100 text-gray-700',
+  introduced: 'bg-blue-100 text-blue-700',
+  won: 'bg-green-700 text-white',
   lost: 'bg-red-100 text-red-700',
 };
 
@@ -65,6 +63,35 @@ const INITIAL_PARTNER_PRODUCT_FORM = {
   description: '',
   url: '',
 };
+
+const INDUSTRY_OPTIONS = [
+  { value: '', label: 'Select industry...' },
+  // Best Fit industries (starred)
+  { value: 'Technology', label: '⭐ Technology', group: 'best' },
+  { value: 'Construction', label: '⭐ Construction', group: 'best' },
+  { value: 'Finance', label: '⭐ Finance', group: 'best' },
+  { value: 'Manufacturing', label: '⭐ Manufacturing', group: 'best' },
+  { value: 'Healthcare', label: '⭐ Healthcare', group: 'best' },
+  // Other industries
+  { value: 'Retail', label: 'Retail', group: 'other' },
+  { value: 'Education', label: 'Education', group: 'other' },
+  { value: 'Real Estate', label: 'Real Estate', group: 'other' },
+  { value: 'Transportation', label: 'Transportation', group: 'other' },
+  { value: 'Hospitality', label: 'Hospitality', group: 'other' },
+  { value: 'Energy', label: 'Energy', group: 'other' },
+  { value: 'Agriculture', label: 'Agriculture', group: 'other' },
+  { value: 'Media', label: 'Media', group: 'other' },
+  { value: 'Other', label: 'Other (specify below)', group: 'other' },
+];
+
+const HEADCOUNT_OPTIONS = [
+  { value: '', label: 'Select headcount...' },
+  { value: '50-99', label: '50-99' },
+  { value: '100-249', label: '100-249' },
+  { value: '250-499', label: '250-499' },
+  { value: '500-1000', label: '500-1,000' },
+  { value: '1000+', label: '1,000+' },
+];
 
 // ============================================================================
 // CUSTOM HOOKS - SUPABASE
@@ -858,6 +885,43 @@ const Select = ({ label, required, options, className = '', ...props }) => (
   </div>
 );
 
+const SelectWithOptGroups = ({ label, required, options, className = '', hint, ...props }) => {
+  const bestFitOptions = options.filter(opt => opt.group === 'best');
+  const otherOptions = options.filter(opt => opt.group === 'other');
+  const defaultOption = options.find(opt => !opt.group);
+
+  return (
+    <div className={className}>
+      {label && (
+        <label className="block text-sm font-medium text-gray-700 mb-1">
+          {label} {required && '*'}
+        </label>
+      )}
+      <select
+        className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
+        {...props}
+      >
+        {defaultOption && <option value={defaultOption.value}>{defaultOption.label}</option>}
+        {bestFitOptions.length > 0 && (
+          <optgroup label="⭐ Best Fit">
+            {bestFitOptions.map(opt => (
+              <option key={opt.value} value={opt.value}>{opt.label.replace('⭐ ', '')}</option>
+            ))}
+          </optgroup>
+        )}
+        {otherOptions.length > 0 && (
+          <optgroup label="Other Industries">
+            {otherOptions.map(opt => (
+              <option key={opt.value} value={opt.value}>{opt.label}</option>
+            ))}
+          </optgroup>
+        )}
+      </select>
+      {hint && <p className="text-xs text-gray-500 mt-1">{hint}</p>}
+    </div>
+  );
+};
+
 const TextArea = ({ label, required, className = '', ...props }) => (
   <div className={className}>
     {label && (
@@ -937,11 +1001,16 @@ const Modal = ({ isOpen, onClose, title, children, size = 'md' }) => {
   );
 };
 
-const StatusBadge = ({ status }) => (
-  <span className={`inline-flex px-2 py-1 text-xs font-medium rounded-full ${STATUS_COLORS[status] || STATUS_COLORS.identified}`}>
-    {status || 'identified'}
-  </span>
-);
+const StatusBadge = ({ status }) => {
+  const statusOption = STATUS_OPTIONS.find(opt => opt.value === status);
+  const label = statusOption?.label || status || 'Identified';
+
+  return (
+    <span className={`inline-flex px-2 py-1 text-xs font-medium rounded-full ${STATUS_COLORS[status] || STATUS_COLORS.identified}`}>
+      {label}
+    </span>
+  );
+};
 
 const EmptyState = ({ icon: Icon, title, description }) => (
   <div className="bg-white rounded-lg border border-gray-200 p-12 text-center">
@@ -1059,11 +1128,22 @@ const PartnerForm = ({ partner, onSave, onClose }) => {
   );
 };
 
-const LeadForm = ({ lead, onSave, onClose }) => {
+const LeadForm = ({ lead, onSave, onClose, selectedProduct }) => {
   const [formData, setFormData] = useState(lead || INITIAL_LEAD_FORM);
+  const [showOtherIndustry, setShowOtherIndustry] = useState(lead?.industry === 'Other' || false);
+  const [otherIndustry, setOtherIndustry] = useState('');
 
   const handleChange = (field) => (e) => {
-    setFormData(prev => ({ ...prev, [field]: e.target.value }));
+    const value = e.target.value;
+    setFormData(prev => ({ ...prev, [field]: value }));
+
+    // Handle "Other" industry selection
+    if (field === 'industry') {
+      setShowOtherIndustry(value === 'Other');
+      if (value !== 'Other') {
+        setOtherIndustry('');
+      }
+    }
   };
 
   const handleSubmit = () => {
@@ -1071,6 +1151,12 @@ const LeadForm = ({ lead, onSave, onClose }) => {
       alert('Name, Email, and Company are required');
       return;
     }
+
+    // Use otherIndustry if "Other" was selected
+    const finalIndustry = formData.industry === 'Other' && otherIndustry.trim()
+      ? otherIndustry.trim()
+      : formData.industry?.trim() || '';
+
     onSave({
       name: formData.name.trim(),
       email: formData.email.trim(),
@@ -1078,24 +1164,75 @@ const LeadForm = ({ lead, onSave, onClose }) => {
       company: formData.company.trim(),
       title: formData.title?.trim() || '',
       company_url: formData.company_url?.trim() || '',
-      industry: formData.industry?.trim() || '',
-      headcount: formData.headcount?.trim() || '',
+      industry: finalIndustry,
+      headcount: formData.headcount || '',
       status: formData.status,
       notes: formData.notes?.trim() || '',
     });
   };
 
   return (
-    <Modal isOpen onClose={onClose} title={lead ? 'Edit Lead' : 'Add Lead'}>
+    <Modal isOpen onClose={onClose} title={lead ? 'Edit Lead' : 'Add Lead'} size="lg">
       <div className="space-y-4">
+        {/* ICP Reminder Banner */}
+        <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
+          <div className="flex items-start gap-3">
+            <div className="flex-shrink-0">
+              <svg className="w-5 h-5 text-blue-600 mt-0.5" fill="currentColor" viewBox="0 0 20 20">
+                <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clipRule="evenodd" />
+              </svg>
+            </div>
+            <div>
+              <p className="text-sm font-medium text-blue-800">Best leads: HR/payroll decision-makers at mid-size companies</p>
+              <p className="text-xs text-blue-600 mt-1">Target companies with 50-1,000 employees in Technology, Construction, Finance, Manufacturing, or Healthcare</p>
+            </div>
+          </div>
+        </div>
+
         <Input label="Name" required value={formData.name} onChange={handleChange('name')} placeholder="Contact name" />
         <Input label="Email" required type="email" value={formData.email} onChange={handleChange('email')} placeholder="contact@company.com" />
         <Input label="Phone" type="tel" value={formData.phone || ''} onChange={handleChange('phone')} placeholder="(555) 123-4567" />
         <Input label="Company" required value={formData.company} onChange={handleChange('company')} placeholder="Company name" />
-        <Input label="Title" value={formData.title || ''} onChange={handleChange('title')} placeholder="Job title" />
+
+        {/* Title field with updated placeholder and hint */}
+        <div>
+          <Input
+            label="Title"
+            value={formData.title || ''}
+            onChange={handleChange('title')}
+            placeholder="e.g. HR Director, Benefits Manager, Payroll Admin"
+          />
+          <p className="text-xs text-green-600 mt-1">Decision-makers convert best</p>
+        </div>
+
         <Input label="Company URL" type="url" value={formData.company_url || ''} onChange={handleChange('company_url')} placeholder="https://company.com" />
-        <Input label="Industry" value={formData.industry || ''} onChange={handleChange('industry')} placeholder="e.g. Technology, Healthcare" />
-        <Input label="Headcount" value={formData.headcount || ''} onChange={handleChange('headcount')} placeholder="e.g. 50, 100-500" />
+
+        {/* Industry dropdown with optgroups */}
+        <SelectWithOptGroups
+          label="Industry"
+          value={formData.industry || ''}
+          onChange={handleChange('industry')}
+          options={INDUSTRY_OPTIONS}
+        />
+
+        {/* Show text input if "Other" is selected */}
+        {showOtherIndustry && (
+          <Input
+            label="Specify Industry"
+            value={otherIndustry}
+            onChange={(e) => setOtherIndustry(e.target.value)}
+            placeholder="Enter the industry"
+          />
+        )}
+
+        {/* Headcount dropdown */}
+        <Select
+          label="Headcount"
+          value={formData.headcount || ''}
+          onChange={handleChange('headcount')}
+          options={HEADCOUNT_OPTIONS}
+        />
+
         <Select label="Status" required value={formData.status} onChange={handleChange('status')} options={STATUS_OPTIONS} />
         <TextArea label="Notes" value={formData.notes || ''} onChange={handleChange('notes')} rows={3} placeholder="Additional notes..." />
         <div className="flex gap-3 pt-2">
@@ -1110,9 +1247,20 @@ const LeadForm = ({ lead, onSave, onClose }) => {
 const AdminLeadForm = ({ lead, partners, onSave, onClose }) => {
   const [formData, setFormData] = useState(lead || INITIAL_LEAD_FORM);
   const [selectedPartnerId, setSelectedPartnerId] = useState(lead?.partner_id || '');
+  const [showOtherIndustry, setShowOtherIndustry] = useState(lead?.industry === 'Other' || false);
+  const [otherIndustry, setOtherIndustry] = useState('');
 
   const handleChange = (field) => (e) => {
-    setFormData(prev => ({ ...prev, [field]: e.target.value }));
+    const value = e.target.value;
+    setFormData(prev => ({ ...prev, [field]: value }));
+
+    // Handle "Other" industry selection
+    if (field === 'industry') {
+      setShowOtherIndustry(value === 'Other');
+      if (value !== 'Other') {
+        setOtherIndustry('');
+      }
+    }
   };
 
   const handleSubmit = () => {
@@ -1124,6 +1272,12 @@ const AdminLeadForm = ({ lead, partners, onSave, onClose }) => {
       alert('Name, Email, and Company are required');
       return;
     }
+
+    // Use otherIndustry if "Other" was selected
+    const finalIndustry = formData.industry === 'Other' && otherIndustry.trim()
+      ? otherIndustry.trim()
+      : formData.industry?.trim() || '';
+
     onSave({
       name: formData.name.trim(),
       email: formData.email.trim(),
@@ -1131,8 +1285,8 @@ const AdminLeadForm = ({ lead, partners, onSave, onClose }) => {
       company: formData.company.trim(),
       title: formData.title?.trim() || '',
       company_url: formData.company_url?.trim() || '',
-      industry: formData.industry?.trim() || '',
-      headcount: formData.headcount?.trim() || '',
+      industry: finalIndustry,
+      headcount: formData.headcount || '',
       status: formData.status,
       notes: formData.notes?.trim() || '',
     }, selectedPartnerId);
@@ -1144,8 +1298,23 @@ const AdminLeadForm = ({ lead, partners, onSave, onClose }) => {
   ];
 
   return (
-    <Modal isOpen onClose={onClose} title={lead ? 'Edit Lead' : 'Create Lead for Partner'}>
+    <Modal isOpen onClose={onClose} title={lead ? 'Edit Lead' : 'Create Lead for Partner'} size="lg">
       <div className="space-y-4">
+        {/* ICP Reminder Banner */}
+        <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
+          <div className="flex items-start gap-3">
+            <div className="flex-shrink-0">
+              <svg className="w-5 h-5 text-blue-600 mt-0.5" fill="currentColor" viewBox="0 0 20 20">
+                <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clipRule="evenodd" />
+              </svg>
+            </div>
+            <div>
+              <p className="text-sm font-medium text-blue-800">Best leads: HR/payroll decision-makers at mid-size companies</p>
+              <p className="text-xs text-blue-600 mt-1">Target companies with 50-1,000 employees in Technology, Construction, Finance, Manufacturing, or Healthcare</p>
+            </div>
+          </div>
+        </div>
+
         <Select
           label="Assign to Partner"
           required
@@ -1157,10 +1326,46 @@ const AdminLeadForm = ({ lead, partners, onSave, onClose }) => {
         <Input label="Email" required type="email" value={formData.email} onChange={handleChange('email')} placeholder="contact@company.com" />
         <Input label="Phone" type="tel" value={formData.phone || ''} onChange={handleChange('phone')} placeholder="(555) 123-4567" />
         <Input label="Company" required value={formData.company} onChange={handleChange('company')} placeholder="Company name" />
-        <Input label="Title" value={formData.title || ''} onChange={handleChange('title')} placeholder="Job title" />
+
+        {/* Title field with updated placeholder and hint */}
+        <div>
+          <Input
+            label="Title"
+            value={formData.title || ''}
+            onChange={handleChange('title')}
+            placeholder="e.g. HR Director, Benefits Manager, Payroll Admin"
+          />
+          <p className="text-xs text-green-600 mt-1">Decision-makers convert best</p>
+        </div>
+
         <Input label="Company URL" type="url" value={formData.company_url || ''} onChange={handleChange('company_url')} placeholder="https://company.com" />
-        <Input label="Industry" value={formData.industry || ''} onChange={handleChange('industry')} placeholder="e.g. Technology, Healthcare" />
-        <Input label="Headcount" value={formData.headcount || ''} onChange={handleChange('headcount')} placeholder="e.g. 50, 100-500" />
+
+        {/* Industry dropdown with optgroups */}
+        <SelectWithOptGroups
+          label="Industry"
+          value={formData.industry || ''}
+          onChange={handleChange('industry')}
+          options={INDUSTRY_OPTIONS}
+        />
+
+        {/* Show text input if "Other" is selected */}
+        {showOtherIndustry && (
+          <Input
+            label="Specify Industry"
+            value={otherIndustry}
+            onChange={(e) => setOtherIndustry(e.target.value)}
+            placeholder="Enter the industry"
+          />
+        )}
+
+        {/* Headcount dropdown */}
+        <Select
+          label="Headcount"
+          value={formData.headcount || ''}
+          onChange={handleChange('headcount')}
+          options={HEADCOUNT_OPTIONS}
+        />
+
         <Select label="Status" required value={formData.status} onChange={handleChange('status')} options={STATUS_OPTIONS} />
         <TextArea label="Notes" value={formData.notes || ''} onChange={handleChange('notes')} rows={3} placeholder="Additional notes..." />
         <div className="flex gap-3 pt-2">
@@ -1374,9 +1579,9 @@ const PartnersTable = ({ partners, leads, onEdit, onDelete }) => (
   </div>
 );
 
-const LeadsTable = ({ leads, onEdit, onDelete, getOwnerName, showPartnerColumn = false, getPartnerName }) => (
+const LeadsTable = ({ leads, onEdit, onDelete, getOwnerName, showPartnerColumn = false, getPartnerName, showProductColumn = false, getProductName }) => (
   <div className="bg-white rounded-lg border border-gray-200 overflow-x-auto">
-    <table className="w-full min-w-[1000px]">
+    <table className="w-full min-w-[1100px]">
       <thead className="bg-gray-50 border-b border-gray-200">
         <tr>
           <th className="text-left px-4 py-3 text-xs font-medium text-gray-500 uppercase">Owner</th>
@@ -1386,10 +1591,14 @@ const LeadsTable = ({ leads, onEdit, onDelete, getOwnerName, showPartnerColumn =
           {showPartnerColumn && (
             <th className="text-left px-4 py-3 text-xs font-medium text-gray-500 uppercase">Partner</th>
           )}
+          {showProductColumn && (
+            <th className="text-left px-4 py-3 text-xs font-medium text-gray-500 uppercase">Product</th>
+          )}
           <th className="text-left px-4 py-3 text-xs font-medium text-gray-500 uppercase">Title</th>
           <th className="text-left px-4 py-3 text-xs font-medium text-gray-500 uppercase">Industry</th>
           <th className="text-left px-4 py-3 text-xs font-medium text-gray-500 uppercase">Headcount</th>
           <th className="text-left px-4 py-3 text-xs font-medium text-gray-500 uppercase">Status</th>
+          <th className="text-left px-4 py-3 text-xs font-medium text-gray-500 uppercase">Commission</th>
           <th className="text-left px-4 py-3 text-xs font-medium text-gray-500 uppercase">Created</th>
           <th className="text-right px-4 py-3 text-xs font-medium text-gray-500 uppercase">Actions</th>
         </tr>
@@ -1414,10 +1623,22 @@ const LeadsTable = ({ leads, onEdit, onDelete, getOwnerName, showPartnerColumn =
                 {getPartnerName ? getPartnerName(lead.partner_id) : '-'}
               </td>
             )}
+            {showProductColumn && (
+              <td className="px-4 py-4 text-sm text-gray-500">
+                {getProductName ? getProductName(lead) : '-'}
+              </td>
+            )}
             <td className="px-4 py-4 text-sm text-gray-500">{lead.title || '-'}</td>
             <td className="px-4 py-4 text-sm text-gray-500">{lead.industry || '-'}</td>
             <td className="px-4 py-4 text-sm text-gray-500">{lead.headcount || '-'}</td>
             <td className="px-4 py-4"><StatusBadge status={lead.status} /></td>
+            <td className="px-4 py-4 text-sm">
+              {lead.status === 'won' ? (
+                <span className="text-green-600 font-medium">$500</span>
+              ) : (
+                <span className="text-gray-400">none</span>
+              )}
+            </td>
             <td className="px-4 py-4 text-sm text-gray-500">
               {lead.created_at ? new Date(lead.created_at).toLocaleDateString() : '-'}
             </td>
@@ -1497,6 +1718,47 @@ const ProductsTable = ({ products, productPartners, partners, onEdit, onDelete }
 // PRODUCT INFO COMPONENT (FOR PARTNER VIEW)
 // ============================================================================
 
+// ICP Card component for displaying Ideal Customer Profile info
+const ICPCard = ({ icon, title, value }) => (
+  <div className="bg-gray-50 rounded-lg p-3 border border-gray-100">
+    <div className="flex items-center gap-2 mb-1">
+      <span className="text-lg">{icon}</span>
+      <span className="text-xs font-medium text-gray-500 uppercase">{title}</span>
+    </div>
+    <p className="text-sm font-medium text-gray-900">{value}</p>
+  </div>
+);
+
+// Qualifying Checklist component
+const QualifyingChecklist = () => (
+  <div className="bg-amber-50 border border-amber-200 rounded-lg p-4 mt-4">
+    <div className="flex items-center gap-2 mb-3">
+      <svg className="w-5 h-5 text-amber-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+      </svg>
+      <span className="font-medium text-amber-800">Before You Refer, Confirm:</span>
+    </div>
+    <ul className="space-y-2">
+      <li className="flex items-start gap-2">
+        <input type="checkbox" className="mt-1 rounded border-amber-300" />
+        <span className="text-sm text-amber-900">Contact is a decision-maker (HR Director, Benefits Manager, or Payroll Admin)</span>
+      </li>
+      <li className="flex items-start gap-2">
+        <input type="checkbox" className="mt-1 rounded border-amber-300" />
+        <span className="text-sm text-amber-900">Company has 50-1,000 employees</span>
+      </li>
+      <li className="flex items-start gap-2">
+        <input type="checkbox" className="mt-1 rounded border-amber-300" />
+        <span className="text-sm text-amber-900">Company is in a target industry (Tech, Construction, Finance, Manufacturing, Healthcare)</span>
+      </li>
+      <li className="flex items-start gap-2">
+        <input type="checkbox" className="mt-1 rounded border-amber-300" />
+        <span className="text-sm text-amber-900">Contact has expressed interest or pain point related to HR/payroll</span>
+      </li>
+    </ul>
+  </div>
+);
+
 const ProductInfoSection = ({ products, getDocumentsByProduct }) => {
   const [expandedProducts, setExpandedProducts] = useState({});
 
@@ -1511,7 +1773,7 @@ const ProductInfoSection = ({ products, getDocumentsByProduct }) => {
 
   return (
     <div className="mb-6">
-      <h3 className="text-sm font-medium text-gray-500 uppercase mb-3">Products</h3>
+      <h3 className="text-sm font-medium text-gray-500 uppercase mb-3">Products to Promote</h3>
       <div className="space-y-3">
         {products.map(product => {
           const isExpanded = expandedProducts[product.id];
@@ -1536,6 +1798,7 @@ const ProductInfoSection = ({ products, getDocumentsByProduct }) => {
 
               {isExpanded && (
                 <div className="px-4 pb-4 border-t border-gray-100">
+                  {/* Product Description */}
                   {product.description && (
                     <div className="mt-3">
                       <h4 className="text-xs font-medium text-gray-500 uppercase mb-1">Description</h4>
@@ -1543,15 +1806,39 @@ const ProductInfoSection = ({ products, getDocumentsByProduct }) => {
                     </div>
                   )}
 
-                  {product.ideal_leads && (
-                    <div className="mt-3">
-                      <h4 className="text-xs font-medium text-gray-500 uppercase mb-1">Ideal Leads</h4>
-                      <p className="text-sm text-gray-700">{product.ideal_leads}</p>
+                  {/* ICP Cards Grid */}
+                  <div className="mt-4">
+                    <h4 className="text-xs font-medium text-gray-500 uppercase mb-2">Ideal Customer Profile</h4>
+                    <div className="grid grid-cols-2 gap-3">
+                      <ICPCard
+                        icon="🏢"
+                        title="Company Type"
+                        value="Mid-size businesses"
+                      />
+                      <ICPCard
+                        icon="💰"
+                        title="Commission"
+                        value="$500 per closed deal"
+                      />
+                      <ICPCard
+                        icon="🏭"
+                        title="Best Industries"
+                        value="Tech, Construction, Finance, Manufacturing, Healthcare"
+                      />
+                      <ICPCard
+                        icon="🎯"
+                        title="Sweet Spot"
+                        value="50-1,000 employees"
+                      />
                     </div>
-                  )}
+                  </div>
 
+                  {/* Qualifying Checklist */}
+                  <QualifyingChecklist />
+
+                  {/* Product URL */}
                   {product.url && (
-                    <div className="mt-3">
+                    <div className="mt-4">
                       <h4 className="text-xs font-medium text-gray-500 uppercase mb-1">Product Link</h4>
                       <a
                         href={product.url}
@@ -1564,8 +1851,9 @@ const ProductInfoSection = ({ products, getDocumentsByProduct }) => {
                     </div>
                   )}
 
+                  {/* Documents */}
                   {documents.length > 0 && (
-                    <div className="mt-3">
+                    <div className="mt-4">
                       <h4 className="text-xs font-medium text-gray-500 uppercase mb-2">Documents</h4>
                       <div className="space-y-2">
                         {documents.map(doc => (
@@ -1582,10 +1870,6 @@ const ProductInfoSection = ({ products, getDocumentsByProduct }) => {
                         ))}
                       </div>
                     </div>
-                  )}
-
-                  {!product.description && !product.ideal_leads && documents.length === 0 && (
-                    <p className="mt-3 text-sm text-gray-400">No additional information available.</p>
                   )}
                 </div>
               )}
@@ -1924,6 +2208,12 @@ const PartnerView = ({ partner, leads, products, getDocumentsByProduct, adminNam
     return partner.name;
   };
 
+  // Helper to get product name for a lead
+  const getProductName = () => {
+    // Use first available product if there are any
+    return products.length > 0 ? products[0].name : '-';
+  };
+
   const tabs = [
     { id: 'leads', label: 'My Leads', icon: FileSpreadsheet },
     { id: 'myProduct', label: 'My Product', icon: Package },
@@ -1938,6 +2228,47 @@ const PartnerView = ({ partner, leads, products, getDocumentsByProduct, adminNam
         {/* Leads Tab */}
         {activeTab === 'leads' && (
           <>
+            {/* Stats Row */}
+            <div className="grid grid-cols-3 gap-4 mb-6">
+              <div className="bg-white rounded-lg border border-gray-200 p-4">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 bg-blue-100 rounded-lg flex items-center justify-center">
+                    <FileSpreadsheet className="w-5 h-5 text-blue-600" />
+                  </div>
+                  <div>
+                    <p className="text-2xl font-bold text-gray-900">{leads.length}</p>
+                    <p className="text-sm text-gray-500">Total Leads</p>
+                  </div>
+                </div>
+              </div>
+              <div className="bg-white rounded-lg border border-gray-200 p-4">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 bg-purple-100 rounded-lg flex items-center justify-center">
+                    <Users className="w-5 h-5 text-purple-600" />
+                  </div>
+                  <div>
+                    <p className="text-2xl font-bold text-gray-900">
+                      {leads.filter(l => l.status === 'introduced' || l.status === 'won').length}
+                    </p>
+                    <p className="text-sm text-gray-500">Total Introductions</p>
+                  </div>
+                </div>
+              </div>
+              <div className="bg-white rounded-lg border border-gray-200 p-4">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 bg-green-100 rounded-lg flex items-center justify-center">
+                    <span className="text-green-600 font-bold">$</span>
+                  </div>
+                  <div>
+                    <p className="text-2xl font-bold text-gray-900">
+                      ${leads.filter(l => l.status === 'won').length * 500}
+                    </p>
+                    <p className="text-sm text-gray-500">Commission Earned</p>
+                  </div>
+                </div>
+              </div>
+            </div>
+
             <ProductInfoSection products={products} getDocumentsByProduct={getDocumentsByProduct} />
 
             <div className="flex justify-between items-center mb-6">
@@ -1953,7 +2284,14 @@ const PartnerView = ({ partner, leads, products, getDocumentsByProduct, adminNam
             {leads.length === 0 ? (
               <EmptyState icon={FileSpreadsheet} title="No leads yet" description="Add your first lead to get started" />
             ) : (
-              <LeadsTable leads={leads} onEdit={handleEditLead} onDelete={handleDeleteLead} getOwnerName={getOwnerName} />
+              <LeadsTable
+                leads={leads}
+                onEdit={handleEditLead}
+                onDelete={handleDeleteLead}
+                getOwnerName={getOwnerName}
+                showProductColumn={true}
+                getProductName={getProductName}
+              />
             )}
           </>
         )}
