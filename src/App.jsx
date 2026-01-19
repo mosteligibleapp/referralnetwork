@@ -2156,6 +2156,221 @@ const QualifyingChecklist = () => (
   </div>
 );
 
+// Commission Structure Table component
+const CommissionStructureTable = () => (
+  <div className="mt-4">
+    <div className="flex items-center gap-2 mb-3">
+      <span className="text-lg">💰</span>
+      <span className="text-xs font-medium text-gray-500 uppercase">Commission Structure</span>
+    </div>
+
+    {/* Flat Commission Table */}
+    <div className="mb-4">
+      <h5 className="text-sm font-medium text-gray-700 mb-2">Flat Commission (One-Time)</h5>
+      <div className="border border-gray-200 rounded-lg overflow-hidden">
+        <table className="w-full text-sm">
+          <thead className="bg-gray-50">
+            <tr>
+              <th className="text-left px-4 py-2 text-xs font-medium text-gray-500">Employer Size</th>
+              <th className="text-left px-4 py-2 text-xs font-medium text-gray-500">Enrollment Req.</th>
+              <th className="text-right px-4 py-2 text-xs font-medium text-gray-500">Payout</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-gray-100">
+            <tr>
+              <td className="px-4 py-2 text-gray-700">&lt; 100</td>
+              <td className="px-4 py-2 text-gray-700">5+ enrolled</td>
+              <td className="px-4 py-2 text-right text-green-600 font-medium">$100</td>
+            </tr>
+            <tr>
+              <td className="px-4 py-2 text-gray-700">100 – 500</td>
+              <td className="px-4 py-2 text-gray-700">10+ enrolled</td>
+              <td className="px-4 py-2 text-right text-green-600 font-medium">$200</td>
+            </tr>
+            <tr>
+              <td className="px-4 py-2 text-gray-700">500 – 1,000</td>
+              <td className="px-4 py-2 text-gray-700">25+ enrolled</td>
+              <td className="px-4 py-2 text-right text-green-600 font-medium">$500</td>
+            </tr>
+            <tr>
+              <td className="px-4 py-2 text-gray-700">1,000 – 4,999</td>
+              <td className="px-4 py-2 text-gray-700">50+ enrolled</td>
+              <td className="px-4 py-2 text-right text-green-600 font-medium">$1,000</td>
+            </tr>
+            <tr>
+              <td className="px-4 py-2 text-gray-700">5,000 – 10,000</td>
+              <td className="px-4 py-2 text-gray-700">125+ enrolled</td>
+              <td className="px-4 py-2 text-right text-green-600 font-medium">$2,500</td>
+            </tr>
+            <tr>
+              <td className="px-4 py-2 text-gray-700">10,000+</td>
+              <td className="px-4 py-2 text-gray-700">250+ enrolled</td>
+              <td className="px-4 py-2 text-right text-green-600 font-medium">$5,000</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    {/* Recurring Commission */}
+    <div>
+      <h5 className="text-sm font-medium text-gray-700 mb-2">Recurring Commission</h5>
+      <div className="border border-gray-200 rounded-lg overflow-hidden">
+        <table className="w-full text-sm">
+          <tbody className="divide-y divide-gray-100">
+            <tr>
+              <td className="px-4 py-2 text-gray-700">First 3 years</td>
+              <td className="px-4 py-2 text-right text-green-600 font-medium">10% of gross profits</td>
+            </tr>
+            <tr>
+              <td className="px-4 py-2 text-gray-700">After 3 years</td>
+              <td className="px-4 py-2 text-right text-green-600 font-medium">5% of gross profits</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+);
+
+// Document Preview Card component
+const DocumentPreviewCard = ({ document }) => {
+  const isImage = document.file_type?.startsWith('image/');
+  const isPDF = document.file_type === 'application/pdf';
+
+  return (
+    <a
+      href={document.file_url}
+      target="_blank"
+      rel="noopener noreferrer"
+      className="block border border-gray-200 rounded-lg overflow-hidden hover:border-blue-300 hover:shadow-sm transition-all"
+    >
+      {/* Preview area */}
+      <div className="h-24 bg-gray-100 flex items-center justify-center">
+        {isImage ? (
+          <img
+            src={document.file_url}
+            alt={document.file_name}
+            className="h-full w-full object-cover"
+          />
+        ) : isPDF ? (
+          <div className="text-center">
+            <FileText className="w-8 h-8 text-red-500 mx-auto" />
+            <span className="text-xs text-gray-500 mt-1">PDF</span>
+          </div>
+        ) : (
+          <div className="text-center">
+            <FileText className="w-8 h-8 text-gray-400 mx-auto" />
+            <span className="text-xs text-gray-500 mt-1">File</span>
+          </div>
+        )}
+      </div>
+      {/* File name */}
+      <div className="p-2 bg-white border-t border-gray-100">
+        <div className="flex items-center gap-1">
+          <Download className="w-3 h-3 text-blue-500 flex-shrink-0" />
+          <span className="text-xs text-gray-700 truncate" title={document.file_name}>
+            {document.file_name}
+          </span>
+        </div>
+      </div>
+    </a>
+  );
+};
+
+// Product Detail Card component for partner view
+const ProductDetailCard = ({ product, documents }) => {
+  const [isExpanded, setIsExpanded] = useState(false);
+
+  return (
+    <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
+      {/* Header - always visible */}
+      <button
+        onClick={() => setIsExpanded(!isExpanded)}
+        className="w-full px-4 py-3 flex items-center justify-between hover:bg-gray-50 transition-colors"
+      >
+        <div className="flex items-center gap-3">
+          <Package className="w-5 h-5 text-blue-500" />
+          <span className="font-medium text-gray-900">{product.name}</span>
+        </div>
+        {isExpanded ? (
+          <ChevronUp className="w-5 h-5 text-gray-400" />
+        ) : (
+          <ChevronDown className="w-5 h-5 text-gray-400" />
+        )}
+      </button>
+
+      {/* Expanded content */}
+      {isExpanded && (
+        <div className="px-4 pb-4 border-t border-gray-100">
+          {/* Description Section */}
+          {product.description && (
+            <div className="mt-4">
+              <h4 className="text-xs font-medium text-gray-500 uppercase mb-2">Description</h4>
+              <p className="text-sm text-gray-700">{product.description}</p>
+            </div>
+          )}
+
+          {/* Ideal Customer Profile Section */}
+          <div className="mt-4">
+            <h4 className="text-xs font-medium text-gray-500 uppercase mb-3">Ideal Customer Profile</h4>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+              <ICPCard
+                icon="🏢"
+                title="Company Type"
+                value="Mid-sized, open to crypto, in growth phase/eager to attract younger workforce/working on employee retention"
+              />
+              <ICPCard
+                icon="🏭"
+                title="Best Industries"
+                value="Tech, Construction, Finance, Manufacturing, Healthcare"
+              />
+              <ICPCard
+                icon="🎯"
+                title="Sweet Spot"
+                value="100-1,000 W-2 full-time salaried employees under 45 and diverse"
+              />
+            </div>
+          </div>
+
+          {/* Commission Structure */}
+          <CommissionStructureTable />
+
+          {/* Product URL */}
+          {product.url && (
+            <div className="mt-4">
+              <h4 className="text-xs font-medium text-gray-500 uppercase mb-2">Product Link</h4>
+              <a
+                href={product.url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-2 text-sm text-blue-600 hover:underline"
+              >
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+                </svg>
+                {product.url}
+              </a>
+            </div>
+          )}
+
+          {/* Documents Section */}
+          {documents.length > 0 && (
+            <div className="mt-4">
+              <h4 className="text-xs font-medium text-gray-500 uppercase mb-3">Documents</h4>
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                {documents.map(doc => (
+                  <DocumentPreviewCard key={doc.id} document={doc} />
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+};
+
 const ProductInfoSection = ({ products, getDocumentsByProduct }) => {
   const [expandedProducts, setExpandedProducts] = useState({});
 
@@ -2660,48 +2875,13 @@ const PartnerView = ({
                 </div>
               ) : (
                 <div className="space-y-3">
-                  {products.map(product => {
-                    const documents = getDocumentsByProduct(product.id);
-                    return (
-                      <div key={product.id} className="bg-white rounded-lg border border-gray-200 p-4">
-                        <div className="flex items-start justify-between">
-                          <div className="flex-1">
-                            <h4 className="font-medium text-gray-900">{product.name}</h4>
-                            {product.description && (
-                              <p className="text-sm text-gray-600 mt-1">{product.description}</p>
-                            )}
-                            {product.ideal_leads && (
-                              <div className="mt-2">
-                                <span className="text-xs font-medium text-gray-500">Ideal Leads: </span>
-                                <span className="text-xs text-gray-600">{product.ideal_leads}</span>
-                              </div>
-                            )}
-                            {product.url && (
-                              <a href={product.url} target="_blank" rel="noopener noreferrer" className="text-sm text-blue-600 hover:underline mt-2 inline-block">
-                                View Product
-                              </a>
-                            )}
-                            {documents.length > 0 && (
-                              <div className="mt-3 flex flex-wrap gap-2">
-                                {documents.map(doc => (
-                                  <a
-                                    key={doc.id}
-                                    href={doc.file_url}
-                                    target="_blank"
-                                    rel="noopener noreferrer"
-                                    className="inline-flex items-center gap-1 px-2 py-1 bg-gray-100 rounded text-xs text-gray-700 hover:bg-gray-200"
-                                  >
-                                    <Download className="w-3 h-3" />
-                                    {doc.file_name}
-                                  </a>
-                                ))}
-                              </div>
-                            )}
-                          </div>
-                        </div>
-                      </div>
-                    );
-                  })}
+                  {products.map(product => (
+                    <ProductDetailCard
+                      key={product.id}
+                      product={product}
+                      documents={getDocumentsByProduct(product.id)}
+                    />
+                  ))}
                 </div>
               )}
             </CollapsibleSection>
