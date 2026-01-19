@@ -1325,13 +1325,11 @@ const PartnerForm = ({ partner, onSave, onClose }) => {
   );
 };
 
-const LeadForm = ({ lead, onSave, onClose, assignedProducts = [], ownProducts = [] }) => {
+const LeadForm = ({ lead, onSave, onClose, assignedProducts = [] }) => {
   const [formData, setFormData] = useState(lead || INITIAL_LEAD_FORM);
   const [showOtherIndustry, setShowOtherIndustry] = useState(lead?.industry === 'Other' || false);
   const [otherIndustry, setOtherIndustry] = useState('');
-  const [selectedProductKey, setSelectedProductKey] = useState(
-    lead?.product_id ? `${lead.product_type}:${lead.product_id}` : ''
-  );
+  const [selectedProductId, setSelectedProductId] = useState(lead?.product_id || '');
 
   const handleChange = (field) => (e) => {
     const value = e.target.value;
@@ -1347,22 +1345,13 @@ const LeadForm = ({ lead, onSave, onClose, assignedProducts = [], ownProducts = 
   };
 
   const handleProductChange = (e) => {
-    setSelectedProductKey(e.target.value);
+    setSelectedProductId(e.target.value);
   };
 
   const handleSubmit = () => {
     if (!formData.name.trim() || !formData.email.trim() || !formData.company.trim()) {
       alert('Name, Email, and Company are required');
       return;
-    }
-
-    // Parse product selection
-    let product_id = null;
-    let product_type = null;
-    if (selectedProductKey) {
-      const [type, id] = selectedProductKey.split(':');
-      product_type = type;
-      product_id = id;
     }
 
     // Use otherIndustry if "Other" was selected
@@ -1381,13 +1370,12 @@ const LeadForm = ({ lead, onSave, onClose, assignedProducts = [], ownProducts = 
       headcount: formData.headcount || '',
       status: formData.status,
       notes: formData.notes?.trim() || '',
-      product_id,
-      product_type,
+      product_id: selectedProductId || null,
+      product_type: selectedProductId ? 'assigned' : null,
     });
   };
 
-  // Build product options with optgroups
-  const hasProducts = assignedProducts.length > 0 || ownProducts.length > 0;
+  const hasProducts = assignedProducts.length > 0;
 
   return (
     <Modal isOpen onClose={onClose} title={lead ? 'Edit Lead' : 'Add Lead'} size="lg">
@@ -1414,25 +1402,14 @@ const LeadForm = ({ lead, onSave, onClose, assignedProducts = [], ownProducts = 
               Product (for this lead)
             </label>
             <select
-              value={selectedProductKey}
+              value={selectedProductId}
               onChange={handleProductChange}
               className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
             >
               <option value="">Select a product...</option>
-              {assignedProducts.length > 0 && (
-                <optgroup label="Products to Promote">
-                  {assignedProducts.map(p => (
-                    <option key={`assigned:${p.id}`} value={`assigned:${p.id}`}>{p.name}</option>
-                  ))}
-                </optgroup>
-              )}
-              {ownProducts.length > 0 && (
-                <optgroup label="My Products">
-                  {ownProducts.map(p => (
-                    <option key={`own:${p.id}`} value={`own:${p.id}`}>{p.name}</option>
-                  ))}
-                </optgroup>
-              )}
+              {assignedProducts.map(p => (
+                <option key={p.id} value={p.id}>{p.name}</option>
+              ))}
             </select>
           </div>
         )}
@@ -3044,18 +3021,12 @@ const PartnerView = ({
               icon={FileSpreadsheet}
               count={leadsForOwnProducts.length}
               defaultOpen={true}
-              actionButton={
-                <Button size="sm" onClick={() => { setEditingLead(null); setShowLeadForm(true); }}>
-                  <Plus className="w-4 h-4" />
-                  Add Lead
-                </Button>
-              }
             >
               {leadsForOwnProducts.length === 0 ? (
                 <div className="bg-white rounded-lg border border-gray-200 p-8 text-center">
                   <FileSpreadsheet className="w-10 h-10 text-gray-300 mx-auto mb-3" />
                   <p className="text-gray-500">No leads for your products yet</p>
-                  <p className="text-sm text-gray-400 mt-1">Add leads for products you've created</p>
+                  <p className="text-sm text-gray-400 mt-1">Leads will appear here when added by the admin</p>
                 </div>
               ) : (
                 <LeadsTable
@@ -3076,7 +3047,6 @@ const PartnerView = ({
         <LeadForm
           lead={editingLead}
           assignedProducts={products}
-          ownProducts={partnerProducts}
           onSave={handleSaveLead}
           onClose={() => { setShowLeadForm(false); setEditingLead(null); }}
         />
