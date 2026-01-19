@@ -97,6 +97,18 @@ const HEADCOUNT_OPTIONS = [
 ];
 
 // ============================================================================
+// HELPER FUNCTIONS
+// ============================================================================
+
+// Sanitize filename for Supabase storage (replace spaces and special chars)
+const sanitizeFileName = (fileName) => {
+  return fileName
+    .replace(/\s+/g, '_')           // Replace spaces with underscores
+    .replace(/[^a-zA-Z0-9._-]/g, '') // Remove special characters except . _ -
+    .toLowerCase();
+};
+
+// ============================================================================
 // CUSTOM HOOKS - SUPABASE
 // ============================================================================
 
@@ -425,7 +437,7 @@ const usePartnerProducts = () => {
       // Upload documents
       const uploadedDocs = [];
       for (const file of files) {
-        const fileName = `partner-products/${productResult.id}/${Date.now()}-${file.name}`;
+        const fileName = `partner-products/${productResult.id}/${Date.now()}-${sanitizeFileName(file.name)}`;
         const { error: uploadError } = await supabase.storage
           .from('product-documents')
           .upload(fileName, file);
@@ -494,7 +506,7 @@ const usePartnerProducts = () => {
       // Upload new documents
       const uploadedDocs = [];
       for (const file of newFiles) {
-        const fileName = `partner-products/${productId}/${Date.now()}-${file.name}`;
+        const fileName = `partner-products/${productId}/${Date.now()}-${sanitizeFileName(file.name)}`;
         const { error: uploadError } = await supabase.storage
           .from('product-documents')
           .upload(fileName, file);
@@ -683,7 +695,7 @@ const useProducts = () => {
       // Upload documents
       const uploadedDocs = [];
       for (const file of files) {
-        const fileName = `${productData.id}/${Date.now()}-${file.name}`;
+        const fileName = `${productData.id}/${Date.now()}-${sanitizeFileName(file.name)}`;
         const { error: uploadError } = await supabase.storage
           .from('product-documents')
           .upload(fileName, file);
@@ -764,7 +776,7 @@ const useProducts = () => {
       // Upload new documents
       const uploadedDocs = [];
       for (const file of newFiles) {
-        const fileName = `${productId}/${Date.now()}-${file.name}`;
+        const fileName = `${productId}/${Date.now()}-${sanitizeFileName(file.name)}`;
         const { error: uploadError } = await supabase.storage
           .from('product-documents')
           .upload(fileName, file);
