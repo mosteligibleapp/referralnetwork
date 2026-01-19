@@ -36,6 +36,8 @@ const INITIAL_LEAD_FORM = {
   status: 'identified',
   notes: '',
   partner_id: '',
+  product_id: '',
+  product_type: '', // 'assigned' or 'own'
 };
 
 const OWNER_FILTER_OPTIONS = [
@@ -61,6 +63,7 @@ const INITIAL_PRODUCT_FORM = {
 const INITIAL_PARTNER_PRODUCT_FORM = {
   name: '',
   description: '',
+  ideal_leads: '',
   url: '',
 };
 
@@ -349,24 +352,42 @@ const useLeads = () => {
 
 /**
  * Hook for managing partner-submitted products (products partners want promoted)
+ * Now supports multiple products per partner with document uploads
  */
 const usePartnerProducts = () => {
   const [partnerProducts, setPartnerProducts] = useState([]);
+  const [partnerProductDocuments, setPartnerProductDocuments] = useState({});
   const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
-    fetchPartnerProducts();
+    fetchAll();
   }, []);
 
-  const fetchPartnerProducts = async () => {
+  const fetchAll = async () => {
     try {
-      const { data, error } = await supabase
+      // Fetch partner products
+      const { data: productsData, error: productsError } = await supabase
         .from('partner_products')
         .select('*')
         .order('created_at', { ascending: false });
 
-      if (error) throw error;
-      setPartnerProducts(data || []);
+      if (productsError) throw productsError;
+      setPartnerProducts(productsData || []);
+
+      // Fetch partner product documents
+      const { data: docsData, error: docsError } = await supabase
+        .from('partner_product_documents')
+        .select('*')
+        .order('created_at', { ascending: true });
+
+      if (!docsError && docsData) {
+        const groupedDocs = docsData.reduce((acc, doc) => {
+          if (!acc[doc.partner_product_id]) acc[doc.partner_product_id] = [];
+          acc[doc.partner_product_id].push(doc);
+          return acc;
+        }, {});
+        setPartnerProductDocuments(groupedDocs);
+      }
     } catch (error) {
       console.error('Error fetching partner products:', error);
     } finally {
@@ -374,67 +395,205 @@ const usePartnerProducts = () => {
     }
   };
 
+  // Get all products for a specific partner (returns array)
+  const getPartnerProducts = useCallback((partnerId) => {
+    return partnerProducts.filter(p => p.partner_id === partnerId);
+  }, [partnerProducts]);
+
+  // Legacy: get single partner product (for backwards compatibility)
   const getPartnerProduct = useCallback((partnerId) => {
     return partnerProducts.find(p => p.partner_id === partnerId) || null;
   }, [partnerProducts]);
 
-  const savePartnerProduct = useCallback(async (partnerId, productData) => {
+  // Get documents for a partner product
+  const getPartnerProductDocuments = useCallback((productId) => {
+    return partnerProductDocuments[productId] || [];
+  }, [partnerProductDocuments]);
+
+  // Add a new partner product with optional files
+  const addPartnerProduct = useCallback(async (partnerId, productData, files = []) => {
     try {
-      const existing = partnerProducts.find(p => p.partner_id === partnerId);
+      // Create product
+      const { data: productResult, error: productError } = await supabase
+        .from('partner_products')
+        .insert([{ ...productData, partner_id: partnerId }])
+        .select()
+        .single();
 
-      if (existing) {
-        // Update existing
-        const { data, error } = await supabase
-          .from('partner_products')
-          .update(productData)
-          .eq('partner_id', partnerId)
+      if (productError) throw productError;
+
+      // Upload documents
+      const uploadedDocs = [];
+      for (const file of files) {
+        const fileName = `partner-products/${productResult.id}/${Date.now()}-${file.name}`;
+        const { error: uploadError } = await supabase.storage
+          .from('product-documents')
+          .upload(fileName, file);
+
+        if (uploadError) throw uploadError;
+
+        const { data: urlData } = supabase.storage
+          .from('product-documents')
+          .getPublicUrl(fileName);
+
+        const { data: docData, error: docError } = await supabase
+          .from('partner_product_documents')
+          .insert([{
+            partner_product_id: productResult.id,
+            file_name: file.name,
+            file_url: urlData.publicUrl,
+            file_type: file.type,
+            file_size: file.size,
+          }])
           .select()
           .single();
 
-        if (error) throw error;
-        setPartnerProducts(prev => prev.map(p => p.partner_id === partnerId ? data : p));
-        return data;
-      } else {
-        // Create new
-        const { data, error } = await supabase
-          .from('partner_products')
-          .insert([{ ...productData, partner_id: partnerId }])
-          .select()
-          .single();
-
-        if (error) throw error;
-        setPartnerProducts(prev => [data, ...prev]);
-        return data;
+        if (docError) throw docError;
+        uploadedDocs.push(docData);
       }
+
+      // Update local state
+      setPartnerProducts(prev => [productResult, ...prev]);
+      if (uploadedDocs.length > 0) {
+        setPartnerProductDocuments(prev => ({ ...prev, [productResult.id]: uploadedDocs }));
+      }
+
+      return productResult;
     } catch (error) {
-      console.error('Error saving partner product:', error);
-      alert('Error saving product');
+      console.error('Error adding partner product:', error);
+      alert('Error adding product: ' + error.message);
       return null;
     }
-  }, [partnerProducts]);
+  }, []);
 
-  const deletePartnerProduct = useCallback(async (partnerId) => {
+  // Update an existing partner product
+  const updatePartnerProduct = useCallback(async (productId, productData, newFiles = [], removedDocIds = []) => {
     try {
+      // Update product
+      const { data: productResult, error: productError } = await supabase
+        .from('partner_products')
+        .update(productData)
+        .eq('id', productId)
+        .select()
+        .single();
+
+      if (productError) throw productError;
+
+      // Remove documents
+      for (const docId of removedDocIds) {
+        const doc = (partnerProductDocuments[productId] || []).find(d => d.id === docId);
+        if (doc) {
+          const filePath = doc.file_url.split('/product-documents/')[1];
+          if (filePath) {
+            await supabase.storage.from('product-documents').remove([filePath]);
+          }
+          await supabase.from('partner_product_documents').delete().eq('id', docId);
+        }
+      }
+
+      // Upload new documents
+      const uploadedDocs = [];
+      for (const file of newFiles) {
+        const fileName = `partner-products/${productId}/${Date.now()}-${file.name}`;
+        const { error: uploadError } = await supabase.storage
+          .from('product-documents')
+          .upload(fileName, file);
+
+        if (uploadError) throw uploadError;
+
+        const { data: urlData } = supabase.storage
+          .from('product-documents')
+          .getPublicUrl(fileName);
+
+        const { data: docData, error: docError } = await supabase
+          .from('partner_product_documents')
+          .insert([{
+            partner_product_id: productId,
+            file_name: file.name,
+            file_url: urlData.publicUrl,
+            file_type: file.type,
+            file_size: file.size,
+          }])
+          .select()
+          .single();
+
+        if (docError) throw docError;
+        uploadedDocs.push(docData);
+      }
+
+      // Update local state
+      setPartnerProducts(prev => prev.map(p => p.id === productId ? productResult : p));
+      setPartnerProductDocuments(prev => ({
+        ...prev,
+        [productId]: [
+          ...(prev[productId] || []).filter(d => !removedDocIds.includes(d.id)),
+          ...uploadedDocs,
+        ],
+      }));
+
+      return productResult;
+    } catch (error) {
+      console.error('Error updating partner product:', error);
+      alert('Error updating product: ' + error.message);
+      return null;
+    }
+  }, [partnerProductDocuments]);
+
+  // Delete a partner product by ID
+  const deletePartnerProduct = useCallback(async (productId) => {
+    try {
+      // Delete documents from storage
+      const docs = partnerProductDocuments[productId] || [];
+      for (const doc of docs) {
+        const filePath = doc.file_url.split('/product-documents/')[1];
+        if (filePath) {
+          await supabase.storage.from('product-documents').remove([filePath]);
+        }
+      }
+
+      // Delete product (cascades to documents)
       const { error } = await supabase
         .from('partner_products')
         .delete()
-        .eq('partner_id', partnerId);
+        .eq('id', productId);
 
       if (error) throw error;
-      setPartnerProducts(prev => prev.filter(p => p.partner_id !== partnerId));
+
+      // Update local state
+      setPartnerProducts(prev => prev.filter(p => p.id !== productId));
+      setPartnerProductDocuments(prev => {
+        const newDocs = { ...prev };
+        delete newDocs[productId];
+        return newDocs;
+      });
     } catch (error) {
       console.error('Error deleting partner product:', error);
       alert('Error deleting product');
     }
-  }, []);
+  }, [partnerProductDocuments]);
+
+  // Legacy: save partner product (for backwards compatibility, creates or updates)
+  const savePartnerProduct = useCallback(async (partnerId, productData) => {
+    const existing = partnerProducts.find(p => p.partner_id === partnerId);
+    if (existing) {
+      return updatePartnerProduct(existing.id, productData, [], []);
+    } else {
+      return addPartnerProduct(partnerId, productData, []);
+    }
+  }, [partnerProducts, addPartnerProduct, updatePartnerProduct]);
 
   return {
     partnerProducts,
+    partnerProductDocuments,
     isLoading,
     getPartnerProduct,
-    savePartnerProduct,
+    getPartnerProducts,
+    getPartnerProductDocuments,
+    addPartnerProduct,
+    updatePartnerProduct,
     deletePartnerProduct,
-    refetch: fetchPartnerProducts,
+    savePartnerProduct,
+    refetch: fetchAll,
   };
 };
 
@@ -1020,6 +1179,44 @@ const EmptyState = ({ icon: Icon, title, description }) => (
   </div>
 );
 
+const CollapsibleSection = ({ title, icon: Icon, children, defaultOpen = true, count, actionButton }) => {
+  const [isOpen, setIsOpen] = useState(defaultOpen);
+
+  return (
+    <div className="mb-6">
+      <button
+        onClick={() => setIsOpen(!isOpen)}
+        className="w-full flex items-center justify-between p-3 bg-gray-100 hover:bg-gray-150 rounded-lg transition-colors"
+      >
+        <div className="flex items-center gap-2">
+          {Icon && <Icon className="w-5 h-5 text-gray-600" />}
+          <span className="font-medium text-gray-900">{title}</span>
+          {count !== undefined && (
+            <span className="text-sm text-gray-500">({count})</span>
+          )}
+        </div>
+        <div className="flex items-center gap-2">
+          {actionButton && isOpen && (
+            <div onClick={(e) => e.stopPropagation()}>
+              {actionButton}
+            </div>
+          )}
+          {isOpen ? (
+            <ChevronUp className="w-5 h-5 text-gray-400" />
+          ) : (
+            <ChevronDown className="w-5 h-5 text-gray-400" />
+          )}
+        </div>
+      </button>
+      {isOpen && (
+        <div className="mt-3">
+          {children}
+        </div>
+      )}
+    </div>
+  );
+};
+
 const Header = ({ title, subtitle, onLogout }) => (
   <header className="bg-white border-b border-gray-200 px-6 py-4 flex justify-between items-center">
     <div>
@@ -1128,10 +1325,13 @@ const PartnerForm = ({ partner, onSave, onClose }) => {
   );
 };
 
-const LeadForm = ({ lead, onSave, onClose, selectedProduct }) => {
+const LeadForm = ({ lead, onSave, onClose, assignedProducts = [], ownProducts = [] }) => {
   const [formData, setFormData] = useState(lead || INITIAL_LEAD_FORM);
   const [showOtherIndustry, setShowOtherIndustry] = useState(lead?.industry === 'Other' || false);
   const [otherIndustry, setOtherIndustry] = useState('');
+  const [selectedProductKey, setSelectedProductKey] = useState(
+    lead?.product_id ? `${lead.product_type}:${lead.product_id}` : ''
+  );
 
   const handleChange = (field) => (e) => {
     const value = e.target.value;
@@ -1146,10 +1346,23 @@ const LeadForm = ({ lead, onSave, onClose, selectedProduct }) => {
     }
   };
 
+  const handleProductChange = (e) => {
+    setSelectedProductKey(e.target.value);
+  };
+
   const handleSubmit = () => {
     if (!formData.name.trim() || !formData.email.trim() || !formData.company.trim()) {
       alert('Name, Email, and Company are required');
       return;
+    }
+
+    // Parse product selection
+    let product_id = null;
+    let product_type = null;
+    if (selectedProductKey) {
+      const [type, id] = selectedProductKey.split(':');
+      product_type = type;
+      product_id = id;
     }
 
     // Use otherIndustry if "Other" was selected
@@ -1168,8 +1381,13 @@ const LeadForm = ({ lead, onSave, onClose, selectedProduct }) => {
       headcount: formData.headcount || '',
       status: formData.status,
       notes: formData.notes?.trim() || '',
+      product_id,
+      product_type,
     });
   };
+
+  // Build product options with optgroups
+  const hasProducts = assignedProducts.length > 0 || ownProducts.length > 0;
 
   return (
     <Modal isOpen onClose={onClose} title={lead ? 'Edit Lead' : 'Add Lead'} size="lg">
@@ -1188,6 +1406,36 @@ const LeadForm = ({ lead, onSave, onClose, selectedProduct }) => {
             </div>
           </div>
         </div>
+
+        {/* Product Selection */}
+        {hasProducts && (
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              Product (for this lead)
+            </label>
+            <select
+              value={selectedProductKey}
+              onChange={handleProductChange}
+              className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
+            >
+              <option value="">Select a product...</option>
+              {assignedProducts.length > 0 && (
+                <optgroup label="Products to Promote">
+                  {assignedProducts.map(p => (
+                    <option key={`assigned:${p.id}`} value={`assigned:${p.id}`}>{p.name}</option>
+                  ))}
+                </optgroup>
+              )}
+              {ownProducts.length > 0 && (
+                <optgroup label="My Products">
+                  {ownProducts.map(p => (
+                    <option key={`own:${p.id}`} value={`own:${p.id}`}>{p.name}</option>
+                  ))}
+                </optgroup>
+              )}
+            </select>
+          </div>
+        )}
 
         <Input label="Name" required value={formData.name} onChange={handleChange('name')} placeholder="Contact name" />
         <Input label="Email" required type="email" value={formData.email} onChange={handleChange('email')} placeholder="contact@company.com" />
@@ -1475,6 +1723,155 @@ const ProductForm = ({ product, partners, existingPartnerIds, existingDocuments,
           options={partnerOptions}
           selected={selectedPartners}
           onChange={setSelectedPartners}
+        />
+
+        <div>
+          <label className="block text-sm font-medium text-gray-700 mb-1">
+            Documents ({currentDocsCount}/5)
+          </label>
+
+          {/* Existing documents */}
+          {existingDocs.filter(d => !removedDocIds.includes(d.id)).map(doc => (
+            <div key={doc.id} className="flex items-center gap-2 p-2 bg-gray-50 rounded mb-2">
+              <FileText className="w-4 h-4 text-gray-400" />
+              <span className="text-sm text-gray-700 flex-1 truncate">{doc.file_name}</span>
+              <button
+                type="button"
+                onClick={() => removeExistingDoc(doc.id)}
+                className="text-red-500 hover:text-red-700"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+          ))}
+
+          {/* New files to upload */}
+          {files.map((file, index) => (
+            <div key={index} className="flex items-center gap-2 p-2 bg-blue-50 rounded mb-2">
+              <Upload className="w-4 h-4 text-blue-400" />
+              <span className="text-sm text-blue-700 flex-1 truncate">{file.name}</span>
+              <button
+                type="button"
+                onClick={() => removeNewFile(index)}
+                className="text-red-500 hover:text-red-700"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+          ))}
+
+          {currentDocsCount < 5 && (
+            <label className="flex items-center justify-center gap-2 p-4 border-2 border-dashed border-gray-300 rounded-lg cursor-pointer hover:border-blue-400 transition-colors">
+              <Upload className="w-5 h-5 text-gray-400" />
+              <span className="text-sm text-gray-500">Click to upload documents</span>
+              <input
+                type="file"
+                multiple
+                onChange={handleFileChange}
+                className="hidden"
+              />
+            </label>
+          )}
+        </div>
+
+        <div className="flex gap-3 pt-2">
+          <Button variant="secondary" onClick={onClose} className="flex-1" disabled={isSubmitting}>
+            Cancel
+          </Button>
+          <Button onClick={handleSubmit} className="flex-1" disabled={isSubmitting}>
+            {isSubmitting ? 'Saving...' : <><Save className="w-4 h-4" />Save</>}
+          </Button>
+        </div>
+      </div>
+    </Modal>
+  );
+};
+
+// Partner Product Form - full featured form for partners to create/edit their products
+const PartnerProductForm = ({ product, existingDocuments, onSave, onClose }) => {
+  const [formData, setFormData] = useState(product || INITIAL_PARTNER_PRODUCT_FORM);
+  const [files, setFiles] = useState([]);
+  const [existingDocs, setExistingDocs] = useState(existingDocuments || []);
+  const [removedDocIds, setRemovedDocIds] = useState([]);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
+  const handleChange = (field) => (e) => {
+    setFormData(prev => ({ ...prev, [field]: e.target.value }));
+  };
+
+  const handleFileChange = (e) => {
+    const newFiles = Array.from(e.target.files);
+    const totalDocs = existingDocs.length - removedDocIds.length + files.length + newFiles.length;
+    if (totalDocs > 5) {
+      alert('Maximum 5 documents allowed');
+      return;
+    }
+    setFiles(prev => [...prev, ...newFiles]);
+  };
+
+  const removeNewFile = (index) => {
+    setFiles(prev => prev.filter((_, i) => i !== index));
+  };
+
+  const removeExistingDoc = (docId) => {
+    setRemovedDocIds(prev => [...prev, docId]);
+  };
+
+  const handleSubmit = async () => {
+    if (!formData.name.trim()) {
+      alert('Product name is required');
+      return;
+    }
+
+    setIsSubmitting(true);
+    try {
+      await onSave(
+        {
+          name: formData.name.trim(),
+          description: formData.description?.trim() || '',
+          ideal_leads: formData.ideal_leads?.trim() || '',
+          url: formData.url?.trim() || '',
+        },
+        files,
+        removedDocIds
+      );
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const currentDocsCount = existingDocs.length - removedDocIds.length + files.length;
+
+  return (
+    <Modal isOpen onClose={onClose} title={product ? 'Edit Product' : 'Add Product'} size="lg">
+      <div className="space-y-4">
+        <Input
+          label="Product Name"
+          required
+          value={formData.name}
+          onChange={handleChange('name')}
+          placeholder="Enter your product name"
+        />
+        <TextArea
+          label="Description"
+          value={formData.description || ''}
+          onChange={handleChange('description')}
+          rows={3}
+          placeholder="Describe your product..."
+        />
+        <TextArea
+          label="Ideal Leads / Target Customers"
+          value={formData.ideal_leads || ''}
+          onChange={handleChange('ideal_leads')}
+          rows={3}
+          placeholder="Describe your ideal customer profile..."
+        />
+        <Input
+          label="Product URL"
+          type="url"
+          value={formData.url || ''}
+          onChange={handleChange('url')}
+          placeholder="https://your-product-website.com"
         />
 
         <div>
@@ -2139,19 +2536,32 @@ const LoginScreen = ({ onSuperadminLogin, onPartnerLogin, hasPartners }) => {
 // VIEW COMPONENTS
 // ============================================================================
 
-const PartnerView = ({ partner, leads, products, getDocumentsByProduct, adminName, getPartnerById, partnerProduct, onSavePartnerProduct, onLogout, onAddLead, onEditLead, onDeleteLead }) => {
-  const [activeTab, setActiveTab] = useState('leads');
+const PartnerView = ({
+  partner,
+  leads,
+  products, // assigned products from admin
+  getDocumentsByProduct,
+  adminName,
+  getPartnerById,
+  partnerProducts, // partner's own products
+  getPartnerProductDocuments,
+  onAddPartnerProduct,
+  onUpdatePartnerProduct,
+  onDeletePartnerProduct,
+  onLogout,
+  onAddLead,
+  onEditLead,
+  onDeleteLead,
+}) => {
+  const [activeTab, setActiveTab] = useState('products');
   const [showLeadForm, setShowLeadForm] = useState(false);
+  const [showPartnerProductForm, setShowPartnerProductForm] = useState(false);
   const [editingLead, setEditingLead] = useState(null);
-  const [productForm, setProductForm] = useState(partnerProduct || INITIAL_PARTNER_PRODUCT_FORM);
-  const [isSavingProduct, setIsSavingProduct] = useState(false);
+  const [editingPartnerProduct, setEditingPartnerProduct] = useState(null);
 
-  // Update product form when partnerProduct changes
-  useEffect(() => {
-    if (partnerProduct) {
-      setProductForm(partnerProduct);
-    }
-  }, [partnerProduct]);
+  // Filter leads by product type
+  const leadsForAssignedProducts = leads.filter(l => l.product_type === 'assigned' || (!l.product_type && !l.product_id));
+  const leadsForOwnProducts = leads.filter(l => l.product_type === 'own');
 
   const handleSaveLead = async (leadData) => {
     if (editingLead) {
@@ -2174,25 +2584,24 @@ const PartnerView = ({ partner, leads, products, getDocumentsByProduct, adminNam
     }
   };
 
-  const handleProductChange = (field) => (e) => {
-    setProductForm(prev => ({ ...prev, [field]: e.target.value }));
+  const handleSavePartnerProduct = async (productData, files, removedDocIds) => {
+    if (editingPartnerProduct) {
+      await onUpdatePartnerProduct(editingPartnerProduct.id, productData, files, removedDocIds);
+    } else {
+      await onAddPartnerProduct(productData, files);
+    }
+    setShowPartnerProductForm(false);
+    setEditingPartnerProduct(null);
   };
 
-  const handleSaveProduct = async () => {
-    if (!productForm.name?.trim()) {
-      alert('Product name is required');
-      return;
-    }
-    setIsSavingProduct(true);
-    try {
-      await onSavePartnerProduct({
-        name: productForm.name.trim(),
-        description: productForm.description?.trim() || '',
-        url: productForm.url?.trim() || '',
-      });
-      alert('Product saved successfully!');
-    } finally {
-      setIsSavingProduct(false);
+  const handleEditPartnerProduct = (product) => {
+    setEditingPartnerProduct(product);
+    setShowPartnerProductForm(true);
+  };
+
+  const handleDeletePartnerProduct = async (productId) => {
+    if (confirm('Delete this product and all its documents?')) {
+      await onDeletePartnerProduct(productId);
     }
   };
 
@@ -2209,14 +2618,22 @@ const PartnerView = ({ partner, leads, products, getDocumentsByProduct, adminNam
   };
 
   // Helper to get product name for a lead
-  const getProductName = () => {
-    // Use first available product if there are any
-    return products.length > 0 ? products[0].name : '-';
+  const getProductName = (lead) => {
+    if (!lead.product_id) return '-';
+    if (lead.product_type === 'assigned') {
+      const product = products.find(p => p.id === lead.product_id);
+      return product?.name || '-';
+    }
+    if (lead.product_type === 'own') {
+      const product = partnerProducts.find(p => p.id === lead.product_id);
+      return product?.name || '-';
+    }
+    return '-';
   };
 
   const tabs = [
-    { id: 'leads', label: 'My Leads', icon: FileSpreadsheet },
-    { id: 'myProduct', label: 'My Product', icon: Package },
+    { id: 'products', label: 'Products', icon: Package },
+    { id: 'leads', label: 'Leads', icon: FileSpreadsheet },
   ];
 
   return (
@@ -2225,6 +2642,147 @@ const PartnerView = ({ partner, leads, products, getDocumentsByProduct, adminNam
       <TabNav tabs={tabs} activeTab={activeTab} onTabChange={setActiveTab} />
 
       <main className="p-6">
+        {/* Products Tab */}
+        {activeTab === 'products' && (
+          <>
+            {/* Products to Promote Section */}
+            <CollapsibleSection
+              title="Products to Promote"
+              icon={Package}
+              count={products.length}
+              defaultOpen={true}
+            >
+              {products.length === 0 ? (
+                <div className="bg-white rounded-lg border border-gray-200 p-8 text-center">
+                  <Package className="w-10 h-10 text-gray-300 mx-auto mb-3" />
+                  <p className="text-gray-500">No products assigned yet</p>
+                  <p className="text-sm text-gray-400 mt-1">Products will appear here when assigned by the admin</p>
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  {products.map(product => {
+                    const documents = getDocumentsByProduct(product.id);
+                    return (
+                      <div key={product.id} className="bg-white rounded-lg border border-gray-200 p-4">
+                        <div className="flex items-start justify-between">
+                          <div className="flex-1">
+                            <h4 className="font-medium text-gray-900">{product.name}</h4>
+                            {product.description && (
+                              <p className="text-sm text-gray-600 mt-1">{product.description}</p>
+                            )}
+                            {product.ideal_leads && (
+                              <div className="mt-2">
+                                <span className="text-xs font-medium text-gray-500">Ideal Leads: </span>
+                                <span className="text-xs text-gray-600">{product.ideal_leads}</span>
+                              </div>
+                            )}
+                            {product.url && (
+                              <a href={product.url} target="_blank" rel="noopener noreferrer" className="text-sm text-blue-600 hover:underline mt-2 inline-block">
+                                View Product
+                              </a>
+                            )}
+                            {documents.length > 0 && (
+                              <div className="mt-3 flex flex-wrap gap-2">
+                                {documents.map(doc => (
+                                  <a
+                                    key={doc.id}
+                                    href={doc.file_url}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="inline-flex items-center gap-1 px-2 py-1 bg-gray-100 rounded text-xs text-gray-700 hover:bg-gray-200"
+                                  >
+                                    <Download className="w-3 h-3" />
+                                    {doc.file_name}
+                                  </a>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </CollapsibleSection>
+
+            {/* My Products Section */}
+            <CollapsibleSection
+              title="My Products"
+              icon={Package}
+              count={partnerProducts.length}
+              defaultOpen={true}
+              actionButton={
+                <Button size="sm" onClick={() => { setEditingPartnerProduct(null); setShowPartnerProductForm(true); }}>
+                  <Plus className="w-4 h-4" />
+                  Add Product
+                </Button>
+              }
+            >
+              {partnerProducts.length === 0 ? (
+                <div className="bg-white rounded-lg border border-gray-200 p-8 text-center">
+                  <Package className="w-10 h-10 text-gray-300 mx-auto mb-3" />
+                  <p className="text-gray-500">No products created yet</p>
+                  <p className="text-sm text-gray-400 mt-1">Add your own products to promote</p>
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  {partnerProducts.map(product => {
+                    const documents = getPartnerProductDocuments(product.id);
+                    return (
+                      <div key={product.id} className="bg-white rounded-lg border border-gray-200 p-4">
+                        <div className="flex items-start justify-between">
+                          <div className="flex-1">
+                            <h4 className="font-medium text-gray-900">{product.name}</h4>
+                            {product.description && (
+                              <p className="text-sm text-gray-600 mt-1">{product.description}</p>
+                            )}
+                            {product.ideal_leads && (
+                              <div className="mt-2">
+                                <span className="text-xs font-medium text-gray-500">Ideal Leads: </span>
+                                <span className="text-xs text-gray-600">{product.ideal_leads}</span>
+                              </div>
+                            )}
+                            {product.url && (
+                              <a href={product.url} target="_blank" rel="noopener noreferrer" className="text-sm text-blue-600 hover:underline mt-2 inline-block">
+                                View Product
+                              </a>
+                            )}
+                            {documents.length > 0 && (
+                              <div className="mt-3 flex flex-wrap gap-2">
+                                {documents.map(doc => (
+                                  <a
+                                    key={doc.id}
+                                    href={doc.file_url}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="inline-flex items-center gap-1 px-2 py-1 bg-gray-100 rounded text-xs text-gray-700 hover:bg-gray-200"
+                                  >
+                                    <Download className="w-3 h-3" />
+                                    {doc.file_name}
+                                  </a>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                          <div className="flex gap-1 ml-4">
+                            <Button variant="ghost" size="sm" onClick={() => handleEditPartnerProduct(product)}>
+                              <Edit2 className="w-4 h-4" />
+                            </Button>
+                            <Button variant="danger" size="sm" onClick={() => handleDeletePartnerProduct(product.id)}>
+                              <Trash2 className="w-4 h-4" />
+                            </Button>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </CollapsibleSection>
+          </>
+        )}
+
         {/* Leads Tab */}
         {activeTab === 'leads' && (
           <>
@@ -2269,87 +2827,87 @@ const PartnerView = ({ partner, leads, products, getDocumentsByProduct, adminNam
               </div>
             </div>
 
-            <ProductInfoSection products={products} getDocumentsByProduct={getDocumentsByProduct} />
-
-            <div className="flex justify-between items-center mb-6">
-              <h2 className="text-lg font-medium text-gray-900">
-                {leads.length} Lead{leads.length !== 1 ? 's' : ''}
-              </h2>
-              <Button onClick={() => { setEditingLead(null); setShowLeadForm(true); }}>
-                <Plus className="w-4 h-4" />
-                Add Lead
-              </Button>
-            </div>
-
-            {leads.length === 0 ? (
-              <EmptyState icon={FileSpreadsheet} title="No leads yet" description="Add your first lead to get started" />
-            ) : (
-              <LeadsTable
-                leads={leads}
-                onEdit={handleEditLead}
-                onDelete={handleDeleteLead}
-                getOwnerName={getOwnerName}
-                showProductColumn={true}
-                getProductName={getProductName}
-              />
-            )}
-          </>
-        )}
-
-        {/* My Product Tab */}
-        {activeTab === 'myProduct' && (
-          <div>
-            <h2 className="text-lg font-medium text-gray-900 mb-2">Submit Your Product</h2>
-            <p className="text-sm text-gray-500 mb-6">
-              Share a product you'd like us to promote to our network. You can submit one product.
-            </p>
-
-            <div className="bg-white rounded-lg border border-gray-200 p-6 max-w-2xl">
-              <div className="space-y-4">
-                <Input
-                  label="Product Name"
-                  required
-                  value={productForm.name || ''}
-                  onChange={handleProductChange('name')}
-                  placeholder="Enter your product name"
-                />
-                <TextArea
-                  label="Description"
-                  value={productForm.description || ''}
-                  onChange={handleProductChange('description')}
-                  rows={4}
-                  placeholder="Describe your product and why it would be valuable to our network..."
-                />
-                <Input
-                  label="Product URL"
-                  type="url"
-                  value={productForm.url || ''}
-                  onChange={handleProductChange('url')}
-                  placeholder="https://your-product-website.com"
-                />
-                <div className="pt-2">
-                  <Button onClick={handleSaveProduct} disabled={isSavingProduct}>
-                    <Save className="w-4 h-4" />
-                    {isSavingProduct ? 'Saving...' : (partnerProduct ? 'Update Product' : 'Submit Product')}
-                  </Button>
+            {/* Leads for Assigned Products Section */}
+            <CollapsibleSection
+              title="Leads for Assigned Products"
+              icon={FileSpreadsheet}
+              count={leadsForAssignedProducts.length}
+              defaultOpen={true}
+              actionButton={
+                <Button size="sm" onClick={() => { setEditingLead(null); setShowLeadForm(true); }}>
+                  <Plus className="w-4 h-4" />
+                  Add Lead
+                </Button>
+              }
+            >
+              {leadsForAssignedProducts.length === 0 ? (
+                <div className="bg-white rounded-lg border border-gray-200 p-8 text-center">
+                  <FileSpreadsheet className="w-10 h-10 text-gray-300 mx-auto mb-3" />
+                  <p className="text-gray-500">No leads for assigned products yet</p>
+                  <p className="text-sm text-gray-400 mt-1">Add leads for products assigned to you by the admin</p>
                 </div>
-              </div>
-
-              {partnerProduct && (
-                <p className="text-xs text-gray-400 mt-4">
-                  Last updated: {new Date(partnerProduct.created_at).toLocaleDateString()}
-                </p>
+              ) : (
+                <LeadsTable
+                  leads={leadsForAssignedProducts}
+                  onEdit={handleEditLead}
+                  onDelete={handleDeleteLead}
+                  getOwnerName={getOwnerName}
+                  showProductColumn={true}
+                  getProductName={getProductName}
+                />
               )}
-            </div>
-          </div>
+            </CollapsibleSection>
+
+            {/* Leads for My Products Section */}
+            <CollapsibleSection
+              title="Leads for My Products"
+              icon={FileSpreadsheet}
+              count={leadsForOwnProducts.length}
+              defaultOpen={true}
+              actionButton={
+                <Button size="sm" onClick={() => { setEditingLead(null); setShowLeadForm(true); }}>
+                  <Plus className="w-4 h-4" />
+                  Add Lead
+                </Button>
+              }
+            >
+              {leadsForOwnProducts.length === 0 ? (
+                <div className="bg-white rounded-lg border border-gray-200 p-8 text-center">
+                  <FileSpreadsheet className="w-10 h-10 text-gray-300 mx-auto mb-3" />
+                  <p className="text-gray-500">No leads for your products yet</p>
+                  <p className="text-sm text-gray-400 mt-1">Add leads for products you've created</p>
+                </div>
+              ) : (
+                <LeadsTable
+                  leads={leadsForOwnProducts}
+                  onEdit={handleEditLead}
+                  onDelete={handleDeleteLead}
+                  getOwnerName={getOwnerName}
+                  showProductColumn={true}
+                  getProductName={getProductName}
+                />
+              )}
+            </CollapsibleSection>
+          </>
         )}
       </main>
 
       {showLeadForm && (
         <LeadForm
           lead={editingLead}
+          assignedProducts={products}
+          ownProducts={partnerProducts}
           onSave={handleSaveLead}
           onClose={() => { setShowLeadForm(false); setEditingLead(null); }}
+        />
+      )}
+
+      {showPartnerProductForm && (
+        <PartnerProductForm
+          product={editingPartnerProduct}
+          existingDocuments={editingPartnerProduct ? getPartnerProductDocuments(editingPartnerProduct.id) : []}
+          onSave={handleSavePartnerProduct}
+          onClose={() => { setShowPartnerProductForm(false); setEditingPartnerProduct(null); }}
         />
       )}
     </div>
@@ -2360,7 +2918,7 @@ const AdminView = ({ adminName, adminId, onLogout }) => {
   const { partners, addPartner, updatePartner, deletePartner, getPartnerById } = usePartners();
   const { leads, allLeads, addLead, updateLead, deleteLead, removePartnerLeads, getLeadsByOwnerFilter } = useLeads();
   const { products, productPartners, addProduct, updateProduct, deleteProduct, getDocumentsByProduct, getPartnersByProduct } = useProducts();
-  const { partnerProducts } = usePartnerProducts();
+  const { partnerProducts, getPartnerProductDocuments } = usePartnerProducts();
 
   const [activeTab, setActiveTab] = useState('partners');
   const [selectedPartnerId, setSelectedPartnerId] = useState(null);
@@ -2666,45 +3224,59 @@ const AdminView = ({ adminName, adminId, onLogout }) => {
             {partnerProducts.length === 0 ? (
               <EmptyState icon={Package} title="No partner products yet" description="Partners can submit products they'd like promoted" />
             ) : (
-              <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
-                <table className="w-full">
-                  <thead className="bg-gray-50 border-b border-gray-200">
-                    <tr>
-                      <th className="text-left px-6 py-3 text-xs font-medium text-gray-500 uppercase">Partner</th>
-                      <th className="text-left px-6 py-3 text-xs font-medium text-gray-500 uppercase">Product Name</th>
-                      <th className="text-left px-6 py-3 text-xs font-medium text-gray-500 uppercase">Description</th>
-                      <th className="text-left px-6 py-3 text-xs font-medium text-gray-500 uppercase">URL</th>
-                      <th className="text-left px-6 py-3 text-xs font-medium text-gray-500 uppercase">Submitted</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-gray-200">
-                    {partnerProducts.map(pp => {
-                      const partnerInfo = getPartnerById(pp.partner_id);
-                      return (
-                        <tr key={pp.id} className="hover:bg-gray-50">
-                          <td className="px-6 py-4 text-sm text-gray-900 font-medium">
-                            {partnerInfo?.name || 'Unknown Partner'}
-                            {partnerInfo?.company && (
-                              <span className="text-gray-500 font-normal"> ({partnerInfo.company})</span>
-                            )}
-                          </td>
-                          <td className="px-6 py-4 text-sm text-gray-900">{pp.name}</td>
-                          <td className="px-6 py-4 text-sm text-gray-500 max-w-xs truncate">{pp.description || '-'}</td>
-                          <td className="px-6 py-4 text-sm">
-                            {pp.url ? (
-                              <a href={pp.url} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline truncate block max-w-[200px]">
-                                {pp.url}
-                              </a>
-                            ) : '-'}
-                          </td>
-                          <td className="px-6 py-4 text-sm text-gray-500">
-                            {pp.created_at ? new Date(pp.created_at).toLocaleDateString() : '-'}
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
+              <div className="space-y-4">
+                {partnerProducts.map(pp => {
+                  const partnerInfo = getPartnerById(pp.partner_id);
+                  const documents = getPartnerProductDocuments(pp.id);
+                  return (
+                    <div key={pp.id} className="bg-white rounded-lg border border-gray-200 p-4">
+                      <div className="flex items-start justify-between">
+                        <div className="flex-1">
+                          <div className="flex items-center gap-2 mb-1">
+                            <h3 className="font-medium text-gray-900">{pp.name}</h3>
+                            <span className="text-xs text-gray-500 bg-gray-100 px-2 py-0.5 rounded">
+                              by {partnerInfo?.name || 'Unknown Partner'}
+                              {partnerInfo?.company && ` (${partnerInfo.company})`}
+                            </span>
+                          </div>
+                          {pp.description && (
+                            <p className="text-sm text-gray-600 mt-1">{pp.description}</p>
+                          )}
+                          {pp.ideal_leads && (
+                            <div className="mt-2">
+                              <span className="text-xs font-medium text-gray-500">Ideal Leads: </span>
+                              <span className="text-xs text-gray-600">{pp.ideal_leads}</span>
+                            </div>
+                          )}
+                          {pp.url && (
+                            <a href={pp.url} target="_blank" rel="noopener noreferrer" className="text-sm text-blue-600 hover:underline mt-2 inline-block">
+                              View Product
+                            </a>
+                          )}
+                          {documents.length > 0 && (
+                            <div className="mt-3 flex flex-wrap gap-2">
+                              {documents.map(doc => (
+                                <a
+                                  key={doc.id}
+                                  href={doc.file_url}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="inline-flex items-center gap-1 px-2 py-1 bg-gray-100 rounded text-xs text-gray-700 hover:bg-gray-200"
+                                >
+                                  <Download className="w-3 h-3" />
+                                  {doc.file_name}
+                                </a>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                        <div className="text-xs text-gray-400 ml-4">
+                          {pp.created_at ? new Date(pp.created_at).toLocaleDateString() : '-'}
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
             )}
           </div>
@@ -2763,7 +3335,13 @@ export default function App() {
   const { partners, getPartnerByEmail, getPartnerById } = usePartners();
   const { leads, addLead, updateLead, deleteLead, getLeadsByPartner } = useLeads();
   const { getProductsByPartner, getDocumentsByProduct } = useProducts();
-  const { getPartnerProduct, savePartnerProduct } = usePartnerProducts();
+  const {
+    getPartnerProducts,
+    getPartnerProductDocuments,
+    addPartnerProduct,
+    updatePartnerProduct,
+    deletePartnerProduct,
+  } = usePartnerProducts();
 
   const handleLogout = () => {
     setUserType(null);
@@ -2807,8 +3385,11 @@ export default function App() {
         getDocumentsByProduct={getDocumentsByProduct}
         adminName={adminName}
         getPartnerById={getPartnerById}
-        partnerProduct={getPartnerProduct(currentPartner.id)}
-        onSavePartnerProduct={(productData) => savePartnerProduct(currentPartner.id, productData)}
+        partnerProducts={getPartnerProducts(currentPartner.id)}
+        getPartnerProductDocuments={getPartnerProductDocuments}
+        onAddPartnerProduct={(productData, files) => addPartnerProduct(currentPartner.id, productData, files)}
+        onUpdatePartnerProduct={(productId, productData, files, removedDocIds) => updatePartnerProduct(productId, productData, files, removedDocIds)}
+        onDeletePartnerProduct={(productId) => deletePartnerProduct(productId)}
         onLogout={handleLogout}
         onAddLead={(leadData) => addLead(currentPartner.id, leadData, 'partner', currentPartner.id)}
         onEditLead={(leadId, leadData) => updateLead(currentPartner.id, leadId, leadData)}
